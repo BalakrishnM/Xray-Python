@@ -8,6 +8,195 @@ from .auth import XrayAuth
 from .config import XrayConfig
 
 
+def _get_test_issue_type(project_key: str) -> Dict[str, Any]:
+    """
+    Get the correct Test issue type for the project.
+    Tries to find Xray's "Test" issue type, falls back to alternatives.
+    
+    Args:
+        project_key: Jira project key
+        
+    Returns:
+        dict: Issue type object (either {"name": "Test"} or {"id": "12345"})
+    """
+    # Jira API uses Basic Auth
+    auth = base64.b64encode(
+        f"{XrayConfig.JIRA_USER_EMAIL}:{XrayConfig.JIRA_API_TOKEN}".encode()
+    ).decode()
+    
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get project metadata to find available issue types
+    project_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/project/{project_key}"
+    
+    try:
+        response = requests.get(project_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        project_data = response.json()
+        
+        issue_types = project_data.get("issueTypes", [])
+        
+        # Try to find "Test" issue type (Xray)
+        for issue_type in issue_types:
+            if issue_type.get("name", "").lower() == "test":
+                print(f"Found Xray Test issue type: {issue_type['name']} (ID: {issue_type['id']})")
+                return {"id": issue_type["id"]}
+        
+        # If no Test type found, list available types
+        available_types = [f"{it['name']} (ID: {it['id']})" for it in issue_types]
+        print(f"WARNING: 'Test' issue type not found in project {project_key}")
+        print(f"Available issue types: {', '.join(available_types)}")
+        
+        # Check if Xray is installed by looking for Test-related types
+        for issue_type in issue_types:
+            name = issue_type.get("name", "").lower()
+            if "test" in name or "xray" in name:
+                print(f"Using alternative test type: {issue_type['name']}")
+                return {"id": issue_type["id"]}
+        
+        # If still not found, raise error with helpful message
+        raise ValueError(
+            f"No 'Test' issue type found in project {project_key}. "
+            f"Please ensure Xray is installed or configure a custom test issue type. "
+            f"Available types: {', '.join(available_types)}"
+        )
+        
+    except requests.exceptions.RequestException as e:
+        print(f"ERROR: Failed to get project issue types: {e}")
+        # Fallback to using name (might fail but worth trying)
+        return {"name": "Test"}
+
+
+def _transition_test_to_completed(test_key: str) -> bool:
+    """
+    Transition a Test issue to 'Completed' or 'Done' status.
+    In some Xray workflows, tests must be completed before they can be executed.
+    
+    Args:
+        test_key: Jira Test issue key (e.g., "ABC-456")
+        
+    Returns:
+        bool: True if successful or already in completed status
+    """
+    # Jira API uses Basic Auth
+    auth = base64.b64encode(
+        f"{XrayConfig.JIRA_USER_EMAIL}:{XrayConfig.JIRA_API_TOKEN}".encode()
+    ).decode()
+    
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Get current status
+        issue_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}"
+        response = requests.get(issue_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        issue_data = response.json()
+        
+        current_status = issue_data.get("fields", {}).get("status", {}).get("name", "")
+        print(f"Test {test_key} current status: {current_status}")
+        
+        # Check if already in completed status
+        completed_statuses = ["completed", "done", "closed", "finished"]
+        if any(status in current_status.lower() for status in completed_statuses):
+            print(f"Test {test_key} already in completed status: {current_status}")
+            return True
+        
+        # Get available transitions
+        transitions_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}/transitions"
+        response = requests.get(transitions_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        transitions_data = response.json()
+        
+        available_transitions = transitions_data.get("transitions", [])
+        
+        # Find a transition to completed status
+        for transition in available_transitions:
+            target_status = transition.get("to", {}).get("name", "").lower()
+            if any(status in target_status for status in completed_statuses):
+                transition_id = transition["id"]
+                transition_name = transition["to"]["name"]
+                
+                print(f"Transitioning {test_key} to '{transition_name}'...")
+                
+                # Perform transition
+                payload = {"transition": {"id": transition_id}}
+                response = requests.post(
+                    transitions_url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=30
+                )
+                response.raise_for_status()
+                
+                print(f"✓ Test {test_key} transitioned to '{transition_name}'")
+                return True
+        
+        # If no direct "Completed" transition, try intermediate transitions
+        print(f"No direct transition to 'Completed' found. Trying intermediate transitions...")
+        
+        intermediate_statuses = ["in progress", "in review", "testing"]
+        for transition in available_transitions:
+            target_status = transition.get("to", {}).get("name", "").lower()
+            if any(status in target_status for status in intermediate_statuses):
+                transition_id = transition["id"]
+                transition_name = transition["to"]["name"]
+                
+                print(f"Transitioning {test_key} to '{transition_name}' (intermediate)...")
+                
+                payload = {"transition": {"id": transition_id}}
+                response = requests.post(
+                    transitions_url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=30
+                )
+                response.raise_for_status()
+                
+                # Now try to transition to Completed again
+                response = requests.get(transitions_url, headers=headers, timeout=30)
+                response.raise_for_status()
+                new_transitions = response.json().get("transitions", [])
+                
+                for new_transition in new_transitions:
+                    new_target = new_transition.get("to", {}).get("name", "").lower()
+                    if any(status in new_target for status in completed_statuses):
+                        new_transition_id = new_transition["id"]
+                        new_transition_name = new_transition["to"]["name"]
+                        
+                        print(f"Transitioning {test_key} to '{new_transition_name}'...")
+                        
+                        payload = {"transition": {"id": new_transition_id}}
+                        response = requests.post(
+                            transitions_url,
+                            headers=headers,
+                            data=json.dumps(payload),
+                            timeout=30
+                        )
+                        response.raise_for_status()
+                        
+                        print(f"✓ Test {test_key} transitioned to '{new_transition_name}'")
+                        return True
+        
+        # List available transitions for debugging
+        transition_names = [f"{t['to']['name']}" for t in available_transitions]
+        print(f"WARNING: Could not transition {test_key} to 'Completed' status")
+        print(f"Current status: {current_status}")
+        print(f"Available transitions: {', '.join(transition_names)}")
+        print(f"Note: Tests may need to be manually transitioned to 'Completed' before execution")
+        
+        return False
+        
+    except requests.exceptions.RequestException as e:
+        print(f"WARNING: Failed to transition test {test_key}: {e}")
+        return False
+
+
 def create_or_get_test(scenario_name: str, story_id: str) -> str:
     """
     Create a new Xray Test or retrieve existing one if it already exists.
@@ -122,6 +311,9 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
         "Content-Type": "application/json"
     }
     
+    # Get the correct issue type for the project
+    issue_type = _get_test_issue_type(XrayConfig.XRAY_PROJECT_KEY)
+    
     payload = {
         "fields": {
             "project": {
@@ -129,9 +321,7 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
             },
             "summary": summary,
             "description": f"Automated test for scenario: {scenario_name}",
-            "issuetype": {
-                "name": "Test"
-            }
+            "issuetype": issue_type  # Use dynamically detected issue type
         }
     }
     
@@ -146,6 +336,11 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
         
         data = response.json()
         test_key = data["key"]
+        
+        print(f"Created test: {test_key}")
+        
+        # Transition test to completed status (required for test execution in some workflows)
+        _transition_test_to_completed(test_key)
         
         # Link the test to the story
         if story_id:
