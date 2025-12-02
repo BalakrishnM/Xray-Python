@@ -115,6 +115,11 @@ def _transition_test_to_completed(test_key: str) -> bool:
         
         available_transitions = transitions_data.get("transitions", [])
         
+        # Debug: Print all available transitions
+        print(f"Available transitions from '{current_status}':")
+        for t in available_transitions:
+            print(f"  - {t['name']} -> {t['to']['name']}")
+        
         # Find a transition to completed status
         for transition in available_transitions:
             target_status = transition.get("to", {}).get("name", "").lower()
@@ -122,7 +127,7 @@ def _transition_test_to_completed(test_key: str) -> bool:
                 transition_id = transition["id"]
                 transition_name = transition["to"]["name"]
                 
-                print(f"Transitioning {test_key} to '{transition_name}'...")
+                print(f"Transitioning {test_key} from '{current_status}' to '{transition_name}'...")
                 
                 # Perform transition
                 payload = {"transition": {"id": transition_id}}
@@ -137,17 +142,19 @@ def _transition_test_to_completed(test_key: str) -> bool:
                 print(f"✓ Test {test_key} transitioned to '{transition_name}'")
                 return True
         
-        # If no direct "Completed" transition, try intermediate transitions
-        print(f"No direct transition to 'Completed' found. Trying intermediate transitions...")
+        # If current status is already an intermediate status (In Progress, In Review, etc.)
+        # but no "Completed" transition found, it might need a different transition name
+        # Try common completion transition names
+        completion_transition_names = ["complete", "finish", "resolve", "close", "mark as done"]
         
-        intermediate_statuses = ["in progress", "in review", "testing"]
         for transition in available_transitions:
-            target_status = transition.get("to", {}).get("name", "").lower()
-            if any(status in target_status for status in intermediate_statuses):
+            transition_name_lower = transition.get("name", "").lower()
+            if any(name in transition_name_lower for name in completion_transition_names):
                 transition_id = transition["id"]
-                transition_name = transition["to"]["name"]
+                transition_name = transition["name"]
+                target_status = transition["to"]["name"]
                 
-                print(f"Transitioning {test_key} to '{transition_name}' (intermediate)...")
+                print(f"Trying completion transition: '{transition_name}' -> '{target_status}'...")
                 
                 payload = {"transition": {"id": transition_id}}
                 response = requests.post(
@@ -158,30 +165,8 @@ def _transition_test_to_completed(test_key: str) -> bool:
                 )
                 response.raise_for_status()
                 
-                # Now try to transition to Completed again
-                response = requests.get(transitions_url, headers=headers, timeout=30)
-                response.raise_for_status()
-                new_transitions = response.json().get("transitions", [])
-                
-                for new_transition in new_transitions:
-                    new_target = new_transition.get("to", {}).get("name", "").lower()
-                    if any(status in new_target for status in completed_statuses):
-                        new_transition_id = new_transition["id"]
-                        new_transition_name = new_transition["to"]["name"]
-                        
-                        print(f"Transitioning {test_key} to '{new_transition_name}'...")
-                        
-                        payload = {"transition": {"id": new_transition_id}}
-                        response = requests.post(
-                            transitions_url,
-                            headers=headers,
-                            data=json.dumps(payload),
-                            timeout=30
-                        )
-                        response.raise_for_status()
-                        
-                        print(f"✓ Test {test_key} transitioned to '{new_transition_name}'")
-                        return True
+                print(f"✓ Test {test_key} transitioned via '{transition_name}' to '{target_status}'")
+                return True
         
         # List available transitions for debugging
         transition_names = [f"{t['to']['name']}" for t in available_transitions]
