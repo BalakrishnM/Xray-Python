@@ -73,7 +73,7 @@ def _get_test_issue_type(project_key: str) -> Dict[str, Any]:
 def _transition_test_to_completed(test_key: str) -> bool:
     """
     Transition a Test issue to 'Completed' or 'Done' status.
-    In some Xray workflows, tests must be completed before they can be executed.
+    Handles multi-step workflows (e.g., Open > In Progress > Non GXP > Completed).
     
     Args:
         test_key: Jira Test issue key (e.g., "ABC-456")
@@ -91,91 +91,136 @@ def _transition_test_to_completed(test_key: str) -> bool:
         "Content-Type": "application/json"
     }
     
+    max_transitions = 5  # Prevent infinite loops
+    transition_count = 0
+    
     try:
-        # Get current status
-        issue_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}"
+        while transition_count < max_transitions:
+            # Get current status
+            issue_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}"
+            response = requests.get(issue_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            issue_data = response.json()
+            
+            current_status = issue_data.get("fields", {}).get("status", {}).get("name", "")
+            print(f"Test {test_key} current status: {current_status}")
+            
+            # Check if already in completed status
+            completed_statuses = ["completed", "done", "closed", "finished"]
+            if any(status in current_status.lower() for status in completed_statuses):
+                print(f"✓ Test {test_key} is in completed status: {current_status}")
+                return True
+            
+            # Get available transitions
+            transitions_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}/transitions"
+            response = requests.get(transitions_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            transitions_data = response.json()
+            
+            available_transitions = transitions_data.get("transitions", [])
+            
+            if transition_count == 0:
+                # Debug: Print all available transitions on first iteration
+                print(f"Available transitions from '{current_status}':")
+                for t in available_transitions:
+                    print(f"  - {t['name']} -> {t['to']['name']}")
+            
+            # Priority 1: Try to transition directly to Completed/Done
+            for transition in available_transitions:
+                target_status = transition.get("to", {}).get("name", "").lower()
+                if any(status in target_status for status in completed_statuses):
+                    transition_id = transition["id"]
+                    transition_name = transition["to"]["name"]
+                    
+                    print(f"Transitioning {test_key} to '{transition_name}'...")
+                    
+                    payload = {"transition": {"id": transition_id}}
+                    response = requests.post(
+                        transitions_url,
+                        headers=headers,
+                        data=json.dumps(payload),
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    
+                    print(f"✓ Test {test_key} transitioned to '{transition_name}'")
+                    transition_count += 1
+                    continue  # Check status again in next iteration
+            
+            # Priority 2: Try common completion transition names (Complete, Finish, etc.)
+            completion_transition_names = ["complete", "finish", "resolve", "close", "mark as done"]
+            for transition in available_transitions:
+                transition_name_lower = transition.get("name", "").lower()
+                if any(name in transition_name_lower for name in completion_transition_names):
+                    transition_id = transition["id"]
+                    transition_name = transition["name"]
+                    target_status = transition["to"]["name"]
+                    
+                    print(f"Transitioning {test_key} via '{transition_name}' to '{target_status}'...")
+                    
+                    payload = {"transition": {"id": transition_id}}
+                    response = requests.post(
+                        transitions_url,
+                        headers=headers,
+                        data=json.dumps(payload),
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    
+                    print(f"✓ Test {test_key} transitioned to '{target_status}'")
+                    transition_count += 1
+                    continue  # Check status again in next iteration
+            
+            # Priority 3: Look for workflow progression statuses (Non GXP, In Review, Testing, etc.)
+            # These are intermediate steps that move toward completion
+            workflow_progression_statuses = [
+                "non gxp", "gxp", "review", "testing", "validation", 
+                "ready for test", "ready", "approved", "to do"
+            ]
+            
+            for transition in available_transitions:
+                target_status_lower = transition.get("to", {}).get("name", "").lower()
+                transition_name_lower = transition.get("name", "").lower()
+                
+                # Check if this transition moves us forward in the workflow
+                if (any(status in target_status_lower for status in workflow_progression_statuses) or
+                    any(status in transition_name_lower for status in workflow_progression_statuses)):
+                    
+                    transition_id = transition["id"]
+                    transition_name = transition["name"]
+                    target_status = transition["to"]["name"]
+                    
+                    print(f"Transitioning {test_key} via '{transition_name}' to '{target_status}' (intermediate step)...")
+                    
+                    payload = {"transition": {"id": transition_id}}
+                    response = requests.post(
+                        transitions_url,
+                        headers=headers,
+                        data=json.dumps(payload),
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    
+                    print(f"✓ Test {test_key} transitioned to '{target_status}'")
+                    transition_count += 1
+                    break  # Continue to next iteration to check for more transitions
+            else:
+                # No suitable transition found
+                break
+        
+        # Check final status
         response = requests.get(issue_url, headers=headers, timeout=30)
         response.raise_for_status()
-        issue_data = response.json()
+        final_status = response.json().get("fields", {}).get("status", {}).get("name", "")
         
-        current_status = issue_data.get("fields", {}).get("status", {}).get("name", "")
-        print(f"Test {test_key} current status: {current_status}")
-        
-        # Check if already in completed status
-        completed_statuses = ["completed", "done", "closed", "finished"]
-        if any(status in current_status.lower() for status in completed_statuses):
-            print(f"Test {test_key} already in completed status: {current_status}")
+        if any(status in final_status.lower() for status in completed_statuses):
+            print(f"✓ Successfully transitioned {test_key} to completed status: {final_status}")
             return True
-        
-        # Get available transitions
-        transitions_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}/transitions"
-        response = requests.get(transitions_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        transitions_data = response.json()
-        
-        available_transitions = transitions_data.get("transitions", [])
-        
-        # Debug: Print all available transitions
-        print(f"Available transitions from '{current_status}':")
-        for t in available_transitions:
-            print(f"  - {t['name']} -> {t['to']['name']}")
-        
-        # Find a transition to completed status
-        for transition in available_transitions:
-            target_status = transition.get("to", {}).get("name", "").lower()
-            if any(status in target_status for status in completed_statuses):
-                transition_id = transition["id"]
-                transition_name = transition["to"]["name"]
-                
-                print(f"Transitioning {test_key} from '{current_status}' to '{transition_name}'...")
-                
-                # Perform transition
-                payload = {"transition": {"id": transition_id}}
-                response = requests.post(
-                    transitions_url,
-                    headers=headers,
-                    data=json.dumps(payload),
-                    timeout=30
-                )
-                response.raise_for_status()
-                
-                print(f"✓ Test {test_key} transitioned to '{transition_name}'")
-                return True
-        
-        # If current status is already an intermediate status (In Progress, In Review, etc.)
-        # but no "Completed" transition found, it might need a different transition name
-        # Try common completion transition names
-        completion_transition_names = ["complete", "finish", "resolve", "close", "mark as done"]
-        
-        for transition in available_transitions:
-            transition_name_lower = transition.get("name", "").lower()
-            if any(name in transition_name_lower for name in completion_transition_names):
-                transition_id = transition["id"]
-                transition_name = transition["name"]
-                target_status = transition["to"]["name"]
-                
-                print(f"Trying completion transition: '{transition_name}' -> '{target_status}'...")
-                
-                payload = {"transition": {"id": transition_id}}
-                response = requests.post(
-                    transitions_url,
-                    headers=headers,
-                    data=json.dumps(payload),
-                    timeout=30
-                )
-                response.raise_for_status()
-                
-                print(f"✓ Test {test_key} transitioned via '{transition_name}' to '{target_status}'")
-                return True
-        
-        # List available transitions for debugging
-        transition_names = [f"{t['to']['name']}" for t in available_transitions]
-        print(f"WARNING: Could not transition {test_key} to 'Completed' status")
-        print(f"Current status: {current_status}")
-        print(f"Available transitions: {', '.join(transition_names)}")
-        print(f"Note: Tests may need to be manually transitioned to 'Completed' before execution")
-        
-        return False
+        else:
+            print(f"WARNING: Could not fully transition {test_key} to 'Completed' status")
+            print(f"Final status: {final_status}")
+            print(f"Note: Test may need manual transition through workflow: Open > In Progress > Non GXP > Completed")
+            return False
         
     except requests.exceptions.RequestException as e:
         print(f"WARNING: Failed to transition test {test_key}: {e}")
