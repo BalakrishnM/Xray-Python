@@ -28,6 +28,26 @@ class XrayConfig:
     # Test configuration
     TEST_SUMMARY_PREFIX = "Automation | "
     
+    # Workflow status configuration
+    TEST_TARGET_STATUS = os.getenv("TEST_TARGET_STATUS", "Non GXP")
+    TEST_EXECUTION_READY_STATUSES = os.getenv("TEST_EXECUTION_READY_STATUSES", "In Progress,Open")
+    TEST_BLOCKED_STATUSES = os.getenv("TEST_BLOCKED_STATUSES", "Completed,Done,Closed,Finished")
+    
+    @classmethod
+    def get_execution_ready_statuses(cls) -> list:
+        """Get list of execution-ready statuses including target status."""
+        statuses = [cls.TEST_TARGET_STATUS]
+        if cls.TEST_EXECUTION_READY_STATUSES:
+            statuses.extend([s.strip() for s in cls.TEST_EXECUTION_READY_STATUSES.split(',')])
+        return [s.lower() for s in statuses if s]
+    
+    @classmethod
+    def get_blocked_statuses(cls) -> list:
+        """Get list of blocked statuses that prevent execution."""
+        if cls.TEST_BLOCKED_STATUSES:
+            return [s.strip().lower() for s in cls.TEST_BLOCKED_STATUSES.split(',') if s.strip()]
+        return []
+    
     @classmethod
     def validate(cls) -> bool:
         """

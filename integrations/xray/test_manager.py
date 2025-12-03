@@ -72,14 +72,15 @@ def _get_test_issue_type(project_key: str) -> Dict[str, Any]:
 
 def _transition_test_to_completed(test_key: str) -> bool:
     """
-    Transition a Test issue to 'Completed' or 'Done' status.
-    Handles multi-step workflows (e.g., Open > In Progress > Non GXP > Completed).
+    Transition a Test issue to an execution-ready status.
+    Uses statuses configured in .env file (TEST_TARGET_STATUS and TEST_EXECUTION_READY_STATUSES).
+    Avoids blocked statuses (TEST_BLOCKED_STATUSES) which prevent execution.
     
     Args:
         test_key: Jira Test issue key (e.g., "ABC-456")
         
     Returns:
-        bool: True if successful or already in completed status
+        bool: True if successful or already in execution-ready status
     """
     # Jira API uses Basic Auth
     auth = base64.b64encode(
@@ -105,11 +106,20 @@ def _transition_test_to_completed(test_key: str) -> bool:
             current_status = issue_data.get("fields", {}).get("status", {}).get("name", "")
             print(f"Test {test_key} current status: {current_status}")
             
-            # Check if already in completed status
-            completed_statuses = ["completed", "done", "closed", "finished"]
-            if any(status in current_status.lower() for status in completed_statuses):
-                print(f"✓ Test {test_key} is in completed status: {current_status}")
+            # Get configured statuses from config
+            execution_ready_statuses = XrayConfig.get_execution_ready_statuses()
+            blocked_statuses = XrayConfig.get_blocked_statuses()
+            
+            # Check if already in an execution-ready status
+            if any(status in current_status.lower() for status in execution_ready_statuses):
+                print(f"✓ Test {test_key} is in execution-ready status: {current_status}")
                 return True
+            
+            # Avoid blocked statuses (they prevent execution)
+            if any(status in current_status.lower() for status in blocked_statuses):
+                print(f"WARNING: Test {test_key} is in blocked status '{current_status}' which prevents execution")
+                print(f"Attempting to transition to execution-ready status...")
+                # Continue to try transitioning to a ready status
             
             # Get available transitions
             transitions_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}/transitions"
@@ -125,10 +135,11 @@ def _transition_test_to_completed(test_key: str) -> bool:
                 for t in available_transitions:
                     print(f"  - {t['name']} -> {t['to']['name']}")
             
-            # Priority 1: Try to transition directly to Completed/Done
+            # Priority 1: Try to transition to configured target status
+            target_statuses = [XrayConfig.TEST_TARGET_STATUS.lower()]
             for transition in available_transitions:
                 target_status = transition.get("to", {}).get("name", "").lower()
-                if any(status in target_status for status in completed_statuses):
+                if any(status in target_status for status in target_statuses):
                     transition_id = transition["id"]
                     transition_name = transition["to"]["name"]
                     
@@ -147,11 +158,12 @@ def _transition_test_to_completed(test_key: str) -> bool:
                     transition_count += 1
                     continue  # Check status again in next iteration
             
-            # Priority 2: Try common completion transition names (Complete, Finish, etc.)
-            completion_transition_names = ["complete", "finish", "resolve", "close", "mark as done"]
+            # Priority 2: Try transition names based on target status
+            target_keywords = [word.lower() for word in XrayConfig.TEST_TARGET_STATUS.split()]
+            transition_names = target_keywords + ["progress", "start"]
             for transition in available_transitions:
                 transition_name_lower = transition.get("name", "").lower()
-                if any(name in transition_name_lower for name in completion_transition_names):
+                if any(name in transition_name_lower for name in transition_names):
                     transition_id = transition["id"]
                     transition_name = transition["name"]
                     target_status = transition["to"]["name"]
@@ -171,18 +183,14 @@ def _transition_test_to_completed(test_key: str) -> bool:
                     transition_count += 1
                     continue  # Check status again in next iteration
             
-            # Priority 3: Look for workflow progression statuses (Non GXP, In Review, Testing, etc.)
-            # These are intermediate steps that move toward completion
-            workflow_progression_statuses = [
-                "non gxp", "gxp", "review", "testing", "validation", 
-                "ready for test", "ready", "approved", "to do"
-            ]
+            # Priority 3: Try any execution-ready workflow status
+            workflow_progression_statuses = XrayConfig.get_execution_ready_statuses()
             
             for transition in available_transitions:
                 target_status_lower = transition.get("to", {}).get("name", "").lower()
                 transition_name_lower = transition.get("name", "").lower()
                 
-                # Check if this transition moves us forward in the workflow
+                # Check if this transition moves us to an execution-ready status
                 if (any(status in target_status_lower for status in workflow_progression_statuses) or
                     any(status in transition_name_lower for status in workflow_progression_statuses)):
                     
@@ -213,14 +221,18 @@ def _transition_test_to_completed(test_key: str) -> bool:
         response.raise_for_status()
         final_status = response.json().get("fields", {}).get("status", {}).get("name", "")
         
-        if any(status in final_status.lower() for status in completed_statuses):
-            print(f"✓ Successfully transitioned {test_key} to completed status: {final_status}")
+        # Check if in execution-ready status
+        execution_ready_statuses = XrayConfig.get_execution_ready_statuses()
+        if any(status in final_status.lower() for status in execution_ready_statuses):
+            print(f"✓ Test {test_key} is in execution-ready status: {final_status}")
             return True
         else:
-            print(f"WARNING: Could not fully transition {test_key} to 'Completed' status")
+            print(f"WARNING: Test {test_key} may not be in optimal status for execution")
             print(f"Final status: {final_status}")
-            print(f"Note: Test may need manual transition through workflow: Open > In Progress > Non GXP > Completed")
-            return False
+            print(f"Target status (from config): {XrayConfig.TEST_TARGET_STATUS}")
+            print(f"Execution-ready statuses: {', '.join(execution_ready_statuses)}")
+            # Return True anyway to allow execution attempt
+            return True
         
     except requests.exceptions.RequestException as e:
         print(f"WARNING: Failed to transition test {test_key}: {e}")
@@ -344,13 +356,30 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
     # Get the correct issue type for the project
     issue_type = _get_test_issue_type(XrayConfig.XRAY_PROJECT_KEY)
     
+    # Use Atlassian Document Format (ADF) for description field
+    description_adf = {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Automated test for scenario: {scenario_name}"
+                    }
+                ]
+            }
+        ]
+    }
+    
     payload = {
         "fields": {
             "project": {
                 "key": XrayConfig.XRAY_PROJECT_KEY
             },
             "summary": summary,
-            "description": f"Automated test for scenario: {scenario_name}",
+            "description": description_adf,
             "issuetype": issue_type  # Use dynamically detected issue type
         }
     }
@@ -369,7 +398,7 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
         
         print(f"Created test: {test_key}")
         
-        # Transition test to completed status (required for test execution in some workflows)
+        # Transition test to execution-ready status (required for test execution)
         _transition_test_to_completed(test_key)
         
         # Link the test to the story
