@@ -107,19 +107,20 @@ def _transition_test_to_completed(test_key: str) -> bool:
             print(f"Test {test_key} current status: {current_status}")
             
             # Get configured statuses from config
+            target_status_lower = XrayConfig.TEST_TARGET_STATUS.lower()
             execution_ready_statuses = XrayConfig.get_execution_ready_statuses()
             blocked_statuses = XrayConfig.get_blocked_statuses()
             
-            # Check if already in an execution-ready status
-            if any(status in current_status.lower() for status in execution_ready_statuses):
-                print(f"✓ Test {test_key} is in execution-ready status: {current_status}")
+            # Check if already at TARGET status (not just any execution-ready status)
+            if target_status_lower in current_status.lower():
+                print(f"✓ Test {test_key} reached target status: {current_status}")
                 return True
             
             # Avoid blocked statuses (they prevent execution)
             if any(status in current_status.lower() for status in blocked_statuses):
                 print(f"WARNING: Test {test_key} is in blocked status '{current_status}' which prevents execution")
-                print(f"Attempting to transition to execution-ready status...")
-                # Continue to try transitioning to a ready status
+                print(f"Attempting to transition to target status...")
+                # Continue to try transitioning to target status
             
             # Get available transitions
             transitions_url = f"{XrayConfig.JIRA_BASE_URL}/rest/api/2/issue/{test_key}/transitions"
@@ -137,13 +138,15 @@ def _transition_test_to_completed(test_key: str) -> bool:
             
             # Priority 1: Try to transition to configured target status
             target_statuses = [XrayConfig.TEST_TARGET_STATUS.lower()]
+            transitioned = False
+            
             for transition in available_transitions:
                 target_status = transition.get("to", {}).get("name", "").lower()
                 if any(status in target_status for status in target_statuses):
                     transition_id = transition["id"]
                     transition_name = transition["to"]["name"]
                     
-                    print(f"Transitioning {test_key} to '{transition_name}'...")
+                    print(f"Transitioning {test_key} to '{transition_name}' (target status)...")
                     
                     payload = {"transition": {"id": transition_id}}
                     response = requests.post(
@@ -156,11 +159,17 @@ def _transition_test_to_completed(test_key: str) -> bool:
                     
                     print(f"✓ Test {test_key} transitioned to '{transition_name}'")
                     transition_count += 1
-                    continue  # Check status again in next iteration
+                    transitioned = True
+                    break  # Exit for loop to recheck status in next while iteration
+            
+            if transitioned:
+                continue  # Continue while loop to verify we reached target status
             
             # Priority 2: Try transition names based on target status
+            transitioned = False  # Reset for Priority 2
             target_keywords = [word.lower() for word in XrayConfig.TEST_TARGET_STATUS.split()]
             transition_names = target_keywords + ["progress", "start"]
+            
             for transition in available_transitions:
                 transition_name_lower = transition.get("name", "").lower()
                 if any(name in transition_name_lower for name in transition_names):
@@ -168,7 +177,7 @@ def _transition_test_to_completed(test_key: str) -> bool:
                     transition_name = transition["name"]
                     target_status = transition["to"]["name"]
                     
-                    print(f"Transitioning {test_key} via '{transition_name}' to '{target_status}'...")
+                    print(f"Transitioning {test_key} via '{transition_name}' to '{target_status}' (intermediate step)...")
                     
                     payload = {"transition": {"id": transition_id}}
                     response = requests.post(
@@ -181,7 +190,11 @@ def _transition_test_to_completed(test_key: str) -> bool:
                     
                     print(f"✓ Test {test_key} transitioned to '{target_status}'")
                     transition_count += 1
-                    continue  # Check status again in next iteration
+                    transitioned = True
+                    break  # Exit for loop to recheck status
+            
+            if transitioned:
+                continue  # Continue while loop to move toward target status
             
             # Priority 3: Try any execution-ready workflow status
             workflow_progression_statuses = XrayConfig.get_execution_ready_statuses()
@@ -221,10 +234,18 @@ def _transition_test_to_completed(test_key: str) -> bool:
         response.raise_for_status()
         final_status = response.json().get("fields", {}).get("status", {}).get("name", "")
         
-        # Check if in execution-ready status
+        # Check if reached target status
+        target_status_lower = XrayConfig.TEST_TARGET_STATUS.lower()
+        if target_status_lower in final_status.lower():
+            print(f"✓ Test {test_key} reached target status: {final_status}")
+            return True
+        
+        # Check if at least in an acceptable execution-ready status
         execution_ready_statuses = XrayConfig.get_execution_ready_statuses()
         if any(status in final_status.lower() for status in execution_ready_statuses):
-            print(f"✓ Test {test_key} is in execution-ready status: {final_status}")
+            print(f"⚠ Test {test_key} is at intermediate status: {final_status}")
+            print(f"Target status: {XrayConfig.TEST_TARGET_STATUS} (recommended for execution)")
+            print(f"This may cause issues with Test Execution creation in some workflows.")
             return True
         else:
             print(f"WARNING: Test {test_key} may not be in optimal status for execution")
@@ -356,22 +377,29 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
     # Get the correct issue type for the project
     issue_type = _get_test_issue_type(XrayConfig.XRAY_PROJECT_KEY)
     
-    # Use Atlassian Document Format (ADF) for description field
-    description_adf = {
-        "version": 1,
-        "type": "doc",
-        "content": [
-            {
-                "type": "paragraph",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Automated test for scenario: {scenario_name}"
-                    }
-                ]
-            }
-        ]
-    }
+    # Prepare description based on configuration
+    description_text = f"Automated test for scenario: {scenario_name}"
+    
+    if XrayConfig.USE_ADF_DESCRIPTION:
+        # Use Atlassian Document Format (ADF)
+        description = {
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": description_text
+                        }
+                    ]
+                }
+            ]
+        }
+    else:
+        # Use plain text (default)
+        description = description_text
     
     payload = {
         "fields": {
@@ -379,7 +407,7 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
                 "key": XrayConfig.XRAY_PROJECT_KEY
             },
             "summary": summary,
-            "description": description_adf,
+            "description": description,
             "issuetype": issue_type  # Use dynamically detected issue type
         }
     }
@@ -412,6 +440,55 @@ def _create_test(summary: str, scenario_name: str, story_id: str) -> str:
         try:
             error_detail = e.response.json()
             error_msg += f" - {error_detail}"
+            
+            # If description format error, retry with opposite format
+            if e.response.status_code == 400 and 'description' in str(error_detail).lower():
+                print(f"Description format error detected. Retrying with {'plain text' if XrayConfig.USE_ADF_DESCRIPTION else 'ADF format'}...")
+                
+                # Toggle description format
+                if XrayConfig.USE_ADF_DESCRIPTION:
+                    # Retry with plain text
+                    payload["fields"]["description"] = description_text
+                else:
+                    # Retry with ADF format
+                    payload["fields"]["description"] = {
+                        "version": 1,
+                        "type": "doc",
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": description_text
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                
+                # Retry the request
+                response = requests.post(
+                    create_url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=30
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                test_key = data["key"]
+                
+                print(f"Created test: {test_key} (using fallback description format)")
+                
+                # Transition test to execution-ready status
+                _transition_test_to_completed(test_key)
+                
+                # Link the test to the story
+                if story_id:
+                    link_test_to_story(test_key, story_id)
+                
+                return test_key
         except:
             error_msg += f" - {e.response.text}"
         

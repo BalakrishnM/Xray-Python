@@ -33,6 +33,10 @@ class XrayConfig:
     TEST_EXECUTION_READY_STATUSES = os.getenv("TEST_EXECUTION_READY_STATUSES", "In Progress,Open")
     TEST_BLOCKED_STATUSES = os.getenv("TEST_BLOCKED_STATUSES", "Completed,Done,Closed,Finished")
     
+    # Description format configuration
+    # Set to "true" for Atlassian Document Format (ADF), "false" for plain text
+    USE_ADF_DESCRIPTION = os.getenv("USE_ADF_DESCRIPTION", "false").lower() == "true"
+    
     @classmethod
     def get_execution_ready_statuses(cls) -> list:
         """Get list of execution-ready statuses including target status."""
