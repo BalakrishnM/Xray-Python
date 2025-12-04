@@ -86,6 +86,34 @@ Set these environment variables in your system or CI/CD pipeline:
 | `JIRA_API_TOKEN` | Jira API Token | `your-api-token` |
 | `XRAY_PROJECT_KEY` | Jira project key for Xray Tests | `ABC` |
 
+#### Workflow Status Configuration (Optional)
+
+Configure workflow statuses to match your project's Jira workflow:
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `TEST_TARGET_STATUS` | Target status for tests to be execution-ready | `Non GXP` | `Ready`, `Approved`, `To Do` |
+| `TEST_EXECUTION_READY_STATUSES` | Alternative execution-ready statuses (comma-separated) | `In Progress,Open` | `Ready,Approved,Open` |
+| `TEST_BLOCKED_STATUSES` | Statuses that prevent test execution (comma-separated) | `Completed,Done,Closed,Finished` | `Closed,Cancelled` |
+
+**Example workflow configurations:**
+
+**Standard Xray workflow:**
+```bash
+TEST_TARGET_STATUS=Ready
+TEST_EXECUTION_READY_STATUSES=Approved,To Do,Open
+TEST_BLOCKED_STATUSES=Completed,Done,Closed
+```
+
+**Custom GXP workflow (Open > In Progress > Non GXP > Completed):**
+```bash
+TEST_TARGET_STATUS=Non GXP
+TEST_EXECUTION_READY_STATUSES=In Progress,Open
+TEST_BLOCKED_STATUSES=Completed,Done,Closed,Finished
+```
+
+> **Important:** The `TEST_TARGET_STATUS` should be the **last status before Completed** in your workflow. Tests in "Completed" or "Done" status cannot be executed.
+
 ### Windows PowerShell Setup
 
 ```powershell
@@ -95,6 +123,11 @@ $env:JIRA_BASE_URL = "https://yourcompany.atlassian.net"
 $env:JIRA_USER_EMAIL = "user@company.com"
 $env:JIRA_API_TOKEN = "your-api-token"
 $env:XRAY_PROJECT_KEY = "ABC"
+
+# Optional: Workflow configuration
+$env:TEST_TARGET_STATUS = "Non GXP"
+$env:TEST_EXECUTION_READY_STATUSES = "In Progress,Open"
+$env:TEST_BLOCKED_STATUSES = "Completed,Done,Closed,Finished"
 ```
 
 ### Linux/Mac Setup
@@ -106,6 +139,28 @@ export JIRA_BASE_URL="https://yourcompany.atlassian.net"
 export JIRA_USER_EMAIL="user@company.com"
 export JIRA_API_TOKEN="your-api-token"
 export XRAY_PROJECT_KEY="ABC"
+
+# Optional: Workflow configuration
+export TEST_TARGET_STATUS="Non GXP"
+export TEST_EXECUTION_READY_STATUSES="In Progress,Open"
+export TEST_BLOCKED_STATUSES="Completed,Done,Closed,Finished"
+```
+
+### Using .env File (Recommended)
+
+Create a `.env` file in your project root:
+
+```bash
+# Copy the template
+cp .env.template .env
+
+# Edit .env with your credentials and workflow settings
+```
+
+Then use a tool like `python-dotenv` to load environment variables:
+
+```bash
+pip install python-dotenv
 ```
 
 ### CI/CD Setup (GitHub Actions Example)
@@ -143,11 +198,86 @@ User Can Login With Valid Credentials
 2. **Run tests with Xray listener**:
 
 ```bash
-# Using the provided run.py script
+# Using the provided run.py script (recommended)
 python run.py tests/
 
 # Or directly with robot command
 robot --listener integrations.xray.XrayListener --outputdir output tests/
+```
+
+### Running Tests with Tags
+
+Filter tests by tags to run specific test subsets:
+
+```bash
+# Run only smoke tests
+python run.py tests/ --tags smoke
+
+# Run multiple tags (smoke OR regression)
+python run.py tests/ --tags smoke,regression
+
+# Using robot command directly
+robot --listener integrations.xray.XrayListener --include smoke --outputdir output tests/
+```
+
+**Example test file with tags:**
+
+```robot
+*** Settings ***
+Documentation    @Story: ABC-123
+
+*** Test Cases ***
+User Can Login
+    [Tags]    smoke    login
+    Given user is on login page
+    When user enters valid credentials
+    Then user is logged in
+
+Admin Can Manage Users
+    [Tags]    regression    admin
+    Given admin is logged in
+    When admin creates new user
+    Then user appears in list
+```
+
+### Running Tests Without Xray Integration
+
+Skip Xray integration to run tests locally without uploading results:
+
+```bash
+# Using run.py script
+python run.py tests/ --skip-xray
+
+# Or set environment variable
+export SKIP_XRAY=true  # Linux/Mac
+$env:SKIP_XRAY = "true"  # Windows PowerShell
+
+python run.py tests/
+
+# Using robot command directly (without Xray listener)
+robot --outputdir output tests/
+```
+
+**Use cases for skipping Xray:**
+- Local development and debugging
+- Running tests in non-CI environments
+- Testing without Xray credentials configured
+- Running quick smoke tests without reporting
+
+### Advanced Examples
+
+```bash
+# Run smoke tests without Xray
+python run.py tests/ --tags smoke --skip-xray
+
+# Run specific test file with custom output directory
+python run.py tests/login_tests.robot --output results/
+
+# Run regression tests with Xray integration
+python run.py tests/ --tags regression
+
+# Run all tests with Xray in specific output folder
+python run.py tests/ --output build/test-results/
 ```
 
 3. **Check results**:

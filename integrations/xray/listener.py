@@ -48,6 +48,16 @@ class XrayListener:
         self.screenshots: List[str] = []
         self.test_xray_mapping: Dict[str, str] = {}  # test_name -> xray_key
         
+        # Check if Xray integration should be skipped
+        self.skip_xray = os.getenv("SKIP_XRAY", "false").lower() == "true"
+        if self.skip_xray:
+            print("\n" + "="*80)
+            print("XRAY INTEGRATION DISABLED (SKIP_XRAY=true)")
+            print("Tests will run normally but results won't be uploaded to Xray")
+            print("="*80 + "\n")
+            self.enabled = False
+            return
+        
         # Validate configuration
         if not XrayConfig.validate():
             print("WARNING: Xray integration is not properly configured. "

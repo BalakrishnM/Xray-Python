@@ -53,32 +53,59 @@ def setup_environment():
     # os.environ["XRAY_PROJECT_KEY"] = "ABC"
 
 
-def run_tests_with_xray(test_path="tests", output_dir="output", tags=None):
+def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_xray=False):
     """
-    Run Robot Framework tests with Xray listener.
+    Run Robot Framework tests with optional Xray listener.
     
     Args:
         test_path: Path to test files or directory
         output_dir: Output directory for test results
-        tags: Optional list of tags to filter tests
+        tags: Optional list of tags to filter tests (e.g., ['smoke', 'regression'])
+        skip_xray: If True, skip Xray integration (only run tests)
         
     Returns:
         int: Exit code (0 = all tests passed, non-zero = failures)
+        
+    Examples:
+        # Run all tests with Xray
+        run_tests_with_xray()
+        
+        # Run only smoke tests with Xray
+        run_tests_with_xray(tags=['smoke'])
+        
+        # Run tests without Xray integration
+        run_tests_with_xray(skip_xray=True)
+        
+        # Run regression tests without Xray
+        run_tests_with_xray(tags=['regression'], skip_xray=True)
     """
     print("="*80)
-    print("Starting Robot Framework test execution with Xray Cloud integration")
+    if skip_xray:
+        print("Starting Robot Framework test execution (Xray integration disabled)")
+    else:
+        print("Starting Robot Framework test execution with Xray Cloud integration")
     print("="*80)
+    
+    # Set environment variable to skip Xray if requested
+    if skip_xray:
+        os.environ["SKIP_XRAY"] = "true"
     
     # Prepare Robot Framework arguments as keyword arguments
     robot_kwargs = {
         'outputdir': output_dir,
-        'listener': 'integrations.xray.XrayListener',
         'loglevel': 'INFO'
     }
     
+    # Add Xray listener unless skip_xray is True
+    if not skip_xray:
+        robot_kwargs['listener'] = 'integrations.xray.XrayListener'
+    
     # Add tag filtering if specified
     if tags:
-        robot_kwargs['include'] = tags
+        if isinstance(tags, list):
+            robot_kwargs['include'] = tags
+        else:
+            robot_kwargs['include'] = [tags]
     
     # Run tests
     try:
@@ -101,15 +128,45 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None):
 
 
 def main():
-    """Main entry point for CI execution."""
+    """
+    Main entry point for CI execution.
+    
+    Command line arguments:
+        python run.py [test_path] [--tags tag1,tag2] [--skip-xray]
+        
+    Examples:
+        python run.py tests/
+        python run.py tests/ --tags smoke
+        python run.py tests/ --tags smoke,regression
+        python run.py tests/ --skip-xray
+        python run.py tests/ --tags smoke --skip-xray
+    """
     # Set up environment
     setup_environment()
     
-    # Determine test path from command line or use default
-    test_path = sys.argv[1] if len(sys.argv) > 1 else "tests"
+    # Parse command line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='Run Robot Framework tests with optional Xray integration')
+    parser.add_argument('test_path', nargs='?', default='tests', help='Path to test files or directory (default: tests)')
+    parser.add_argument('--tags', '-t', help='Comma-separated list of tags to include (e.g., smoke,regression)')
+    parser.add_argument('--skip-xray', action='store_true', help='Skip Xray integration (only run tests)')
+    parser.add_argument('--output', '-o', default='output', help='Output directory (default: output)')
+    
+    args = parser.parse_args()
+    
+    # Parse tags if provided
+    tags = None
+    if args.tags:
+        tags = [tag.strip() for tag in args.tags.split(',')]
+        print(f"Running tests with tags: {', '.join(tags)}")
     
     # Run tests with Xray integration
-    exit_code = run_tests_with_xray(test_path=test_path)
+    exit_code = run_tests_with_xray(
+        test_path=args.test_path,
+        output_dir=args.output,
+        tags=tags,
+        skip_xray=args.skip_xray
+    )
     
     # Exit with appropriate code for CI/CD
     sys.exit(exit_code)
