@@ -16,7 +16,7 @@ class XrayListener:
     Robot Framework listener that integrates with Xray Cloud.
     
     This listener:
-    - Extracts Story ID from feature file descriptions (@Story: ABC-123)
+    - Extracts Jira ID from feature file descriptions (Jira-Id: ABC-123)
     - Creates or retrieves Xray Tests for each scenario
     - Uploads BDD test steps to Xray
     - Links tests to stories
@@ -80,8 +80,8 @@ class XrayListener:
         if not self.enabled:
             return
         
-        # Extract Story ID from suite documentation
-        # Format: @Story: ABC-123
+        # Extract Jira ID from suite documentation
+        # Format: Jira-Id: ABC-123
         doc = data.doc if hasattr(data, 'doc') else ""
         
         self.story_id = self._extract_story_id(doc)
@@ -293,19 +293,19 @@ class XrayListener:
     
     def _extract_story_id(self, text: str) -> Optional[str]:
         """
-        Extract Story ID from text in format @Story: ABC-123.
+        Extract Jira ID from text in format Jira-Id: ABC-123.
         
         Args:
-            text: Text to search for Story ID
+            text: Text to search for Jira ID
             
         Returns:
-            Optional[str]: Story ID if found, None otherwise
+            Optional[str]: Jira ID if found, None otherwise
         """
         if not text:
             return None
         
-        # Pattern: @Story: ABC-123 or @Story:ABC-123
-        pattern = r'@Story:\s*([A-Z]+-\d+)'
+        # Pattern: Jira-Id: ABC-123 or Jira-Id:ABC-123
+        pattern = r'Jira-Id:\s*([A-Z]+-\d+)'
         match = re.search(pattern, text, re.IGNORECASE)
         
         if match:
@@ -315,52 +315,61 @@ class XrayListener:
     
     def _extract_bdd_steps(self, test_data) -> List[Dict[str, str]]:
         """
-        Extract BDD steps from Robot Framework test keywords.
+        Extract test steps from Robot Framework test definition.
+        
+        This extracts ALL steps defined in the test, regardless of whether
+        they actually execute (important for tests that fail early).
         
         Args:
             test_data: Robot Framework test data object
             
         Returns:
-            List[Dict[str, str]]: List of step dictionaries
+            List[Dict[str, str]]: List of step dictionaries with action/data/result
         """
         steps = []
         
         if not hasattr(test_data, 'body'):
             return steps
         
+        step_number = 1
         for item in test_data.body:
-            # Check if it's a keyword
+            # Check if it's a keyword call or comment
             if hasattr(item, 'name'):
                 keyword_name = item.name
                 
-                # Check if it's a BDD keyword (Given, When, Then, And, But)
-                bdd_keywords = ['Given', 'When', 'Then', 'And', 'But']
+                # Skip empty lines and comments that are just step numbers
+                if not keyword_name or keyword_name.strip() == '':
+                    continue
                 
-                is_bdd = False
-                step_text = keyword_name
+                # Check for step comments (e.g., "# Step 1: Open shop website")
+                if keyword_name.strip().startswith('#'):
+                    # This is a comment describing a step, skip for now
+                    continue
                 
-                for bdd_kw in bdd_keywords:
-                    if keyword_name.startswith(bdd_kw + ' '):
-                        is_bdd = True
-                        break
+                # Extract keyword arguments
+                args = []
+                if hasattr(item, 'args'):
+                    args = [str(arg) for arg in item.args if arg]
                 
-                if is_bdd or len(steps) == 0:  # Include first keyword even if not BDD
-                    # Extract arguments if present
-                    args = []
-                    if hasattr(item, 'args'):
-                        args = [str(arg) for arg in item.args]
-                    
-                    step_data = ""
-                    if args:
-                        step_data = " | ".join(args)
-                    
-                    step = {
-                        "action": step_text,
-                        "data": step_data,
-                        "result": ""
-                    }
-                    
-                    steps.append(step)
+                # Build step action text
+                action = keyword_name
+                
+                # Build step data from arguments
+                step_data = ""
+                if args:
+                    step_data = ", ".join(args)
+                
+                # Try to extract expected result from keyword documentation
+                expected_result = f"Step {step_number} completes successfully"
+                
+                step = {
+                    "action": f"Step {step_number}: {action}",
+                    "data": step_data,
+                    "result": expected_result
+                }
+                
+                steps.append(step)
+                step_number += 1
         
         return steps
     
@@ -461,6 +470,7 @@ class XrayListener:
         Extract Xray test ID from test tags.
         
         Looks for tags in format: xray:XSP-123 or xray-XSP-123
+        If multiple xray tags exist, returns the first one.
         
         Args:
             tags: Test tags list
@@ -471,12 +481,20 @@ class XrayListener:
         if not tags:
             return None
         
+        xray_keys = []
         for tag in tags:
             tag_str = str(tag)
             # Match xray:XSP-123 or xray-XSP-123
             match = re.match(r'xray[:-]([A-Z]+-\d+)', tag_str, re.IGNORECASE)
             if match:
-                return match.group(1)
+                xray_keys.append(match.group(1))
+        
+        if xray_keys:
+            if len(xray_keys) > 1:
+                print(f"  ⚠️  WARNING: Multiple Xray tags found: {', '.join(xray_keys)}")
+                print(f"  Using first tag: {xray_keys[0]}")
+                print(f"  Consider removing duplicate tags from test file")
+            return xray_keys[0]
         
         return None
     
@@ -549,10 +567,17 @@ class XrayListener:
                     
                     # Now update based on what we found
                     if tags_line != -1:
-                        # Found existing [Tags] line - append xray tag
-                        if f'xray:{xray_key}' not in lines[tags_line] and f'xray-{xray_key}' not in lines[tags_line]:
+                        # Found existing [Tags] line
+                        # Check if ANY xray tag already exists (not just this specific one)
+                        has_xray_tag = re.search(r'xray[:-][A-Z]+-\d+', lines[tags_line])
+                        if not has_xray_tag:
+                            # No xray tag exists, add one
                             lines[tags_line] = lines[tags_line].rstrip() + f'    xray:{xray_key}'
                             updated = True
+                        elif f'xray:{xray_key}' not in lines[tags_line] and f'xray-{xray_key}' not in lines[tags_line]:
+                            # Different xray tag exists, don't add duplicate
+                            print(f"  ℹ️  Xray tag already exists in test, skipping duplicate")
+                            updated = False
                     elif doc_end != -1:
                         # Has documentation but no tags - insert [Tags] after doc
                         indent = '    '

@@ -53,7 +53,7 @@ def setup_environment():
     # os.environ["XRAY_PROJECT_KEY"] = "ABC"
 
 
-def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_xray=False):
+def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_xray=False, browser=None):
     """
     Run Robot Framework tests with optional Xray listener.
     
@@ -62,6 +62,7 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         output_dir: Output directory for test results
         tags: Optional list of tags to filter tests (e.g., ['smoke', 'regression'])
         skip_xray: If True, skip Xray integration (only run tests)
+        browser: Browser to use for tests (e.g., 'chrome', 'firefox', 'edge')
         
     Returns:
         int: Exit code (0 = all tests passed, non-zero = failures)
@@ -73,17 +74,24 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         # Run only smoke tests with Xray
         run_tests_with_xray(tags=['smoke'])
         
+        # Run tests in Firefox
+        run_tests_with_xray(browser='firefox')
+        
         # Run tests without Xray integration
         run_tests_with_xray(skip_xray=True)
         
-        # Run regression tests without Xray
-        run_tests_with_xray(tags=['regression'], skip_xray=True)
+        # Run regression tests in Edge without Xray
+        run_tests_with_xray(tags=['regression'], browser='edge', skip_xray=True)
     """
     print("="*80)
     if skip_xray:
         print("Starting Robot Framework test execution (Xray integration disabled)")
     else:
         print("Starting Robot Framework test execution with Xray Cloud integration")
+    
+    if browser:
+        print(f"Browser: {browser.capitalize()}")
+    
     print("="*80)
     
     # Set environment variable to skip Xray if requested
@@ -106,6 +114,12 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
             robot_kwargs['include'] = tags
         else:
             robot_kwargs['include'] = [tags]
+    
+    # Add browser variable if specified
+    if browser:
+        # Capitalize browser name for Robot Framework
+        browser_value = browser.capitalize()
+        robot_kwargs['variable'] = [f'BROWSER:{browser_value}']
     
     # Run tests
     try:
@@ -132,14 +146,15 @@ def main():
     Main entry point for CI execution.
     
     Command line arguments:
-        python run.py [test_path] [--tags tag1,tag2] [--skip-xray]
+        python run.py [test_path] [--tags tag1,tag2] [--skip-xray] [--browser chrome]
         
     Examples:
         python run.py tests/
         python run.py tests/ --tags smoke
-        python run.py tests/ --tags smoke,regression
-        python run.py tests/ --skip-xray
-        python run.py tests/ --tags smoke --skip-xray
+        python run.py tests/ --browser firefox
+        python run.py tests/ -b chrome -t smoke
+        python run.py tests/ --tags smoke,regression --skip-xray
+        python run.py tests/ -b edge --skip-xray
     """
     # Set up environment
     setup_environment()
@@ -149,6 +164,7 @@ def main():
     parser = argparse.ArgumentParser(description='Run Robot Framework tests with optional Xray integration')
     parser.add_argument('test_path', nargs='?', default='tests', help='Path to test files or directory (default: tests)')
     parser.add_argument('--tags', '-t', help='Comma-separated list of tags to include (e.g., smoke,regression)')
+    parser.add_argument('--browser', '-b', help='Browser to use (e.g., chrome, firefox, edge, safari)')
     parser.add_argument('--skip-xray', action='store_true', help='Skip Xray integration (only run tests)')
     parser.add_argument('--output', '-o', default='output', help='Output directory (default: output)')
     
@@ -165,6 +181,7 @@ def main():
         test_path=args.test_path,
         output_dir=args.output,
         tags=tags,
+        browser=args.browser,
         skip_xray=args.skip_xray
     )
     
