@@ -1,9 +1,9 @@
 """Example Robot Framework feature file with Xray integration."""
 
 *** Settings ***
-Documentation    @Story: XSP-23
+Documentation    Jira-Id: XSP-23
 ...              This is an example test suite that demonstrates Xray Cloud integration.
-...              The @Story tag links all tests in this suite to the specified Jira Story.
+...              The Jira-Id tag links all tests in this suite to the specified Jira Story.
 ...              
 ...              When executed with the XrayListener, this suite will:
 ...              1. Create/retrieve Xray Tests for each scenario
@@ -23,7 +23,7 @@ ${EXPECTED_MSG}  Login successful
 *** Test Cases ***
 User Can Login With Valid Credentials
     [Documentation]    Verify that a user can successfully login with valid credentials
-    [Tags]    login    smoke    regression    xray:XSP-128
+    [Tags]    login    smoke    regression    xray:XSP-145
     Given user is on login page
     When user enters valid credentials
     Then user should see success message
