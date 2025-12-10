@@ -53,7 +53,7 @@ def setup_environment():
     # os.environ["XRAY_PROJECT_KEY"] = "ABC"
 
 
-def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_xray=False, browser=None):
+def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_xray=False, browser=None, browser_library=None):
     """
     Run Robot Framework tests with optional Xray listener.
     
@@ -63,6 +63,7 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         tags: Optional list of tags to filter tests (e.g., ['smoke', 'regression'])
         skip_xray: If True, skip Xray integration (only run tests)
         browser: Browser to use for tests (e.g., 'chrome', 'firefox', 'edge')
+        browser_library: Path to custom browser support library (e.g., 'tests/Web/Library/BrowserSupport.py')
         
     Returns:
         int: Exit code (0 = all tests passed, non-zero = failures)
@@ -82,6 +83,9 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         
         # Run regression tests in Edge without Xray
         run_tests_with_xray(tags=['regression'], browser='edge', skip_xray=True)
+        
+        # Run with custom browser library
+        run_tests_with_xray(browser='chrome', browser_library='tests/Web/Library/BrowserSupport.py')
     """
     print("="*80)
     if skip_xray:
@@ -91,6 +95,9 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
     
     if browser:
         print(f"Browser: {browser.capitalize()}")
+    
+    if browser_library:
+        print(f"Using browser library: {browser_library}")
     
     print("="*80)
     
@@ -104,6 +111,16 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         'loglevel': 'INFO'
     }
     
+    # Add custom browser library if specified
+    if browser_library:
+        # Add the library path to Python path for imports
+        library_dir = Path(browser_library).parent
+        if library_dir not in sys.path:
+            sys.path.insert(0, str(library_dir))
+        
+        # Add as library to Robot Framework
+        robot_kwargs['pythonpath'] = str(library_dir)
+    
     # Add Xray listener unless skip_xray is True
     if not skip_xray:
         robot_kwargs['listener'] = 'integrations.xray.XrayListener'
@@ -115,11 +132,18 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         else:
             robot_kwargs['include'] = [tags]
     
-    # Add browser variable if specified
+    # Add browser variables - always set defaults or use specified browser
     if browser:
         # Capitalize browser name for Robot Framework
         browser_value = browser.capitalize()
-        robot_kwargs['variable'] = [f'BROWSER:{browser_value}']
+    else:
+        browser_value = 'Chrome'
+    
+    robot_kwargs['variable'] = [
+        f'BROWSER:{browser_value}',
+        f'global_browser_options:{browser_value}',
+        f'DEFAULT_BROWSER:{browser_value}'
+    ]
     
     # Run tests
     try:
@@ -165,6 +189,7 @@ def main():
     parser.add_argument('test_path', nargs='?', default='tests', help='Path to test files or directory (default: tests)')
     parser.add_argument('--tags', '-t', help='Comma-separated list of tags to include (e.g., smoke,regression)')
     parser.add_argument('--browser', '-b', help='Browser to use (e.g., chrome, firefox, edge, safari)')
+    parser.add_argument('--browser-library', '-l', help='Path to custom browser support library (e.g., tests/Web/Library/BrowserSupport.py)')
     parser.add_argument('--skip-xray', action='store_true', help='Skip Xray integration (only run tests)')
     parser.add_argument('--output', '-o', default='output', help='Output directory (default: output)')
     
@@ -182,6 +207,7 @@ def main():
         output_dir=args.output,
         tags=tags,
         browser=args.browser,
+        browser_library=args.browser_library,
         skip_xray=args.skip_xray
     )
     
