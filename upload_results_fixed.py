@@ -418,6 +418,16 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
     if skipped_count > 0:
         print(f"⚠ Skipped {skipped_count} test(s)")
     
+    # Important note about test existence
+    tests_not_in_xray = [tr for tr in validated_results if not test_manager._get_jira_issue_id(tr['test_key'])]
+    if tests_not_in_xray:
+        print(f"\n⚠ WARNING: {len(tests_not_in_xray)} test(s) with xray tags don't exist in Xray:")
+        for tr in tests_not_in_xray:
+            print(f"   • {tr['test_key']} - will be filtered out during upload")
+        print(f"\n   To create these tests automatically, run:")
+        print(f"   python upload_results_fixed.py --output {output_dir} --story {story_id or 'TP-XXXX'} --create-tests")
+        print(f"\n   Only tests that exist in Xray will be included in the Test Execution.")
+    
     # Collect attachments (log.html, report.html)
     attachments = []
     for filename in ['log.html', 'report.html']:
