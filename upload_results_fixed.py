@@ -362,18 +362,24 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
         try:
             issue_id = test_manager._get_jira_issue_id(test_key)
         except Exception as e:
-            print(f"      ✗ Error checking test: {e}")
+            print(f"      ⚠ Could not verify test: {e}")
             issue_id = None
         
         if issue_id:
             print(f"      ✓ {test_key} exists (ID: {issue_id})")
             validated_results.append(test_result)
         else:
-            # Test doesn't exist
+            # Test doesn't exist in Xray
             print(f"      ⚠ {test_key} not found in Xray")
             
-            if create_tests and story_id:
-                # Auto-create the test
+            # If test has an xray tag, try to upload anyway (will be created by execution_manager)
+            # Only skip if auto-create is explicitly disabled
+            if not create_tests:
+                print(f"      → Will attempt upload anyway (may fail if test doesn't exist)")
+                print(f"      → Use --create-tests --story to pre-create test")
+                validated_results.append(test_result)
+            elif create_tests and story_id:
+                # Auto-create the test first
                 print(f"      → Creating test: {scenario_name}")
                 try:
                     # Create new test linked to Story
@@ -386,13 +392,13 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
                     
                 except Exception as e:
                     print(f"      ✗ Failed to create test: {e}")
-                    skipped_count += 1
-            elif create_tests and not story_id:
-                print(f"      → Cannot create: Story ID required (use --story TP-XXXX)")
-                skipped_count += 1
+                    print(f"      → Will attempt upload with original ID {test_key}")
+                    validated_results.append(test_result)
             else:
-                print(f"      → Skipping (use --create-tests --story to auto-create)")
-                skipped_count += 1
+                # create_tests=True but no story_id
+                print(f"      → Cannot pre-create: Story ID required")
+                print(f"      → Will attempt upload anyway")
+                validated_results.append(test_result)
     
     if not validated_results:
         print(f"\n✗ No valid tests to upload after validation")
