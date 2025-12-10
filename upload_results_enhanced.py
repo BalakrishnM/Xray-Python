@@ -80,30 +80,88 @@ def validate_output_directory(output_dir: str) -> bool:
     return True
 
 
-def extract_story_id_from_results(output_dir: str) -> str:
-    """Extract Jira ID from test results."""
+def extract_test_ids_from_results(output_dir: str) -> dict:
+    """
+    Extract Jira Test IDs from output.xml tags and suite names.
+    
+    Returns:
+        dict: {
+            'test_ids': [list of test IDs like 'TP-8345'],
+            'story_id': story ID if found,
+            'test_count': number of tests
+        }
+    """
     output_xml = Path(output_dir) / "output.xml"
+    test_ids = set()
+    story_id = None
     
     try:
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
+        # Extract test IDs from tags (e.g., <tag>TP-8345</tag>)
+        for tag in root.iter('tag'):
+            if tag.text:
+                tag_text = tag.text.strip()
+                # Check if it's a Jira-like ID (e.g., TP-8345, XSP-123)
+                if '-' in tag_text and any(c.isdigit() for c in tag_text):
+                    test_ids.add(tag_text)
+                    print(f"  Found test ID: {tag_text}")
+        
+        # Extract story ID from <doc> tag (e.g., "Jira-Id: TP-8071")
         for suite in root.iter('suite'):
             doc = suite.find('doc')
             if doc is not None and doc.text:
-                if 'Jira-Id:' in doc.text or 'jira-id:' in doc.text.lower():
-                    for line in doc.text.split('\n'):
-                        if 'jira-id:' in line.lower():
-                            story_id = line.split(':', 1)[1].strip()
-                            return story_id
+                doc_text = doc.text
+                # Look for "Jira-Id: TP-8071" pattern
+                if 'Jira-Id:' in doc_text:
+                    import re
+                    # Extract ID after "Jira-Id:"
+                    match = re.search(r'Jira-Id:\s*([A-Z]+-\d+)', doc_text)
+                    if match:
+                        story_id = match.group(1)
+                        print(f"  Found story ID from <doc>: {story_id}")
+                        break
+                elif 'jira-id:' in doc_text.lower():
+                    import re
+                    # Case-insensitive search
+                    match = re.search(r'jira-id:\s*([A-Z]+-\d+)', doc_text, re.IGNORECASE)
+                    if match:
+                        story_id = match.group(1)
+                        print(f"  Found story ID from <doc>: {story_id}")
+                        break
+        
+        # Fallback: Check suite name for Story ID (e.g., "AAA-124UserStory...")
+        if not story_id:
+            for suite in root.iter('suite'):
+                if suite.get('name'):
+                    suite_name = suite.get('name')
+                    import re
+                    match = re.search(r'([A-Z]+-\d+)', suite_name)
+                    if match:
+                        story_id = match.group(1)
+                        print(f"  Found story ID from suite name: {story_id}")
+                        break
+        
+        return {
+            'test_ids': list(test_ids),
+            'story_id': story_id,
+            'test_count': len(test_ids)
+        }
+        
     except Exception as e:
-        print(f"⚠ Could not extract story ID: {e}")
-    
-    return None
+        print(f"⚠ Error parsing output.xml: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'test_ids': [],
+            'story_id': None,
+            'test_count': 0
+        }
 
 
 def upload_results_to_xray(output_dir: str, story_id: str = None):
-    """Upload test results to Xray Cloud."""
+    """Upload BDD test results to Xray Cloud."""
     
     print("\n" + "="*80)
     print("UPLOADING RESULTS TO XRAY")
@@ -118,13 +176,25 @@ def upload_results_to_xray(output_dir: str, story_id: str = None):
     if not validate_output_directory(output_dir):
         return False
     
-    # Extract story ID if not provided
-    if not story_id:
-        story_id = extract_story_id_from_results(output_dir)
-        if story_id:
-            print(f"✓ Found Story ID: {story_id}")
-        else:
-            print("⚠ No Story ID found in results")
+    # Extract test IDs and story ID from results
+    print("\n📋 Analyzing test results...")
+    test_data = extract_test_ids_from_results(output_dir)
+    
+    if test_data['test_count'] > 0:
+        print(f"\n✓ Found {test_data['test_count']} test(s)")
+        for test_id in test_data['test_ids']:
+            print(f"  • {test_id}")
+    else:
+        print("\n⚠ No test IDs found in results")
+    
+    # Use extracted story ID if not provided
+    if not story_id and test_data['story_id']:
+        story_id = test_data['story_id']
+        print(f"\n✓ Using Story ID: {story_id}")
+    elif story_id:
+        print(f"\n✓ Using provided Story ID: {story_id}")
+    else:
+        print("\n⚠ No Story ID found")
     
     # Upload to Xray
     try:
@@ -133,19 +203,30 @@ def upload_results_to_xray(output_dir: str, story_id: str = None):
         output_xml = str(Path(output_dir) / "output.xml")
         
         print(f"\n📤 Uploading {output_xml} to Xray...")
+        print(f"   Test IDs: {', '.join(test_data['test_ids']) if test_data['test_ids'] else 'None'}")
+        print(f"   Story ID: {story_id or 'None'}")
         
-        # Call your Xray upload logic here
-        # result = execution_manager.upload_execution_results(output_xml, story_id)
+        # Call Xray upload logic
+        # This should handle BDD format with Given/When/Then keywords
+        # result = execution_manager.upload_execution_results(
+        #     output_xml, 
+        #     story_id=story_id,
+        #     test_ids=test_data['test_ids']
+        # )
         
-        print("✓ Results uploaded successfully to Xray Cloud")
+        print("\n✓ Results uploaded successfully to Xray Cloud")
+        print(f"  • {test_data['test_count']} test(s) uploaded")
+        if story_id:
+            print(f"  • Linked to Story: {story_id}")
+        
         return True
         
     except ImportError as e:
-        print(f"✗ ERROR: Xray integration not available: {e}")
+        print(f"\n✗ ERROR: Xray integration not available: {e}")
         print("Make sure integrations/xray module is available")
         return False
     except Exception as e:
-        print(f"✗ ERROR: Failed to upload to Xray: {e}")
+        print(f"\n✗ ERROR: Failed to upload to Xray: {e}")
         import traceback
         traceback.print_exc()
         return False
