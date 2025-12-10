@@ -125,7 +125,11 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
         }
         
         # Find all test cases
-        for suite in root.findall('.//suite'):
+        # Check both root suite and nested suites
+        all_suites = [root] if root.tag == 'suite' else []
+        all_suites.extend(root.findall('.//suite'))
+        
+        for suite in all_suites:
             # Try to extract Story ID from suite documentation
             if not story_id:
                 doc = suite.find('doc')
