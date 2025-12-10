@@ -99,10 +99,15 @@ def extract_test_ids_from_results(output_dir: str) -> dict:
         tree = ET.parse(output_xml)
         root = tree.getroot()
         
-        # Extract test IDs from tags (e.g., <tag>TP-8345</tag>)
+        # Extract test IDs from tags (e.g., <tag>TP-8345</tag> or <tag>xray:TP-8345</tag>)
         for tag in root.iter('tag'):
             if tag.text:
                 tag_text = tag.text.strip()
+                
+                # Remove 'xray:' prefix if present
+                if tag_text.startswith('xray:'):
+                    tag_text = tag_text[5:]  # Remove 'xray:' prefix
+                
                 # Check if it's a Jira-like ID (e.g., TP-8345, XSP-123)
                 if '-' in tag_text and any(c.isdigit() for c in tag_text):
                     test_ids.add(tag_text)
@@ -258,11 +263,16 @@ def upload_results_to_xray(output_dir: str, story_id: str = None):
         
         for suite in results.suite.suites:
             for test in suite.tests:
-                # Find matching test ID from tags
+                # Find matching test ID from tags (remove xray: prefix if present)
                 test_key = None
                 for tag in test.tags:
-                    if '-' in tag and any(c.isdigit() for c in tag):
-                        test_key = tag
+                    tag_text = str(tag)
+                    # Remove 'xray:' prefix if present
+                    if tag_text.startswith('xray:'):
+                        tag_text = tag_text[5:]
+                    
+                    if '-' in tag_text and any(c.isdigit() for c in tag_text):
+                        test_key = tag_text
                         break
                 
                 if test_key and test_key in test_data['test_ids']:
