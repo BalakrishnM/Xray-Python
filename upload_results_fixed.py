@@ -19,10 +19,19 @@ Usage:
 import os
 import sys
 import argparse
-import xml.etree.ElementTree as ET
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
+
+# Use defusedxml for secure XML parsing (protects against XXE attacks)
+try:
+    from defusedxml.ElementTree import parse as ET_parse
+    XML_PARSER_SECURE = True
+except ImportError:
+    from xml.etree.ElementTree import parse as ET_parse
+    XML_PARSER_SECURE = False
+    print("⚠ WARNING: defusedxml not installed - using standard XML parser")
+    print("   Install with: pip install defusedxml")
 
 # Add project root to Python path
 project_root = Path(__file__).parent
@@ -93,12 +102,20 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
         }
     """
     try:
-        tree = ET.parse(output_xml_path)
+        # Validate input file exists and is readable
+        xml_path = Path(output_xml_path)
+        if not xml_path.exists():
+            raise FileNotFoundError(f"output.xml not found: {output_xml_path}")
+        if not xml_path.is_file():
+            raise ValueError(f"Path is not a file: {output_xml_path}")
+        
+        # Parse XML securely
+        tree = ET_parse(str(xml_path))
         root = tree.getroot()
         
         test_results = []
         story_id = None
-        output_dir = str(Path(output_xml_path).parent)
+        output_dir = xml_path.parent
         
         # Status mapping
         status_map = {
@@ -114,10 +131,15 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 doc = suite.find('doc')
                 if doc is not None and doc.text:
                     # Look for "Jira-Id: TP-XXXX" pattern
-                    match = re.search(r'Jira-Id:\s*(TP-\d+)', doc.text)
+                    match = re.search(r'Jira-Id:\s*([A-Z][A-Z0-9]+-\d+)', doc.text)
                     if match:
                         story_id = match.group(1)
-                        print(f"✓ Found Story ID: {story_id}")
+                        # Validate Story ID format (prevent injection)
+                        if re.match(r'^[A-Z][A-Z0-9]+-\d+$', story_id):
+                            print(f"✓ Found Story ID: {story_id}")
+                        else:
+                            print(f"⚠ Invalid Story ID format: {story_id}")
+                            story_id = None
             
             for test in suite.findall('.//test'):
                 test_name = test.get('name')
@@ -137,11 +159,16 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                     tag_text = tag.text
                     if tag_text and tag_text.startswith('xray:'):
                         # Strip "xray:" prefix
-                        test_key = tag_text[5:]
-                        break
+                        potential_key = tag_text[5:]
+                        # Validate test key format (prevent injection)
+                        if re.match(r'^[A-Z][A-Z0-9]+-\d+$', potential_key):
+                            test_key = potential_key
+                            break
+                        else:
+                            print(f"⚠ Warning: Invalid test key format in tag: {tag_text}")
                 
                 if not test_key:
-                    print(f"⚠ Warning: Test '{test_name}' has no xray:TP-XXXX tag - skipping")
+                    print(f"⚠ Warning: Test '{test_name}' has no valid xray:TP-XXXX tag - skipping")
                     continue
                 
                 print(f"✓ Found test: {test_key} - {test_name} ({xray_status})")
@@ -176,19 +203,29 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 
                 # Find screenshots for this test
                 screenshots = []
-                screenshot_dir = os.path.join(output_dir, 'screenshots')
+                screenshot_dir = Path(output_dir) / 'screenshots'
                 
-                if os.path.exists(screenshot_dir):
+                if screenshot_dir.exists() and screenshot_dir.is_dir():
                     # Look for screenshots matching test name or test key
                     test_name_normalized = test_name.replace(' ', '_').replace('/', '_')
                     
-                    for filename in os.listdir(screenshot_dir):
-                        if test_name_normalized in filename or test_key in filename:
-                            screenshot_path = os.path.join(screenshot_dir, filename)
-                            screenshots.append({
-                                'path': screenshot_path,
-                                'step_index': None  # Will be distributed by execution_manager
-                            })
+                    try:
+                        for filepath in screenshot_dir.iterdir():
+                            if not filepath.is_file():
+                                continue
+                            
+                            filename = filepath.name
+                            # Validate that file is actually inside screenshot_dir (prevent path traversal)
+                            if filepath.resolve().parent != screenshot_dir.resolve():
+                                continue
+                            
+                            if test_name_normalized in filename or test_key in filename:
+                                screenshots.append({
+                                    'path': str(filepath),
+                                    'step_index': None  # Will be distributed by execution_manager
+                                })
+                    except (PermissionError, OSError) as e:
+                        print(f"    ⚠ Could not read screenshot directory: {e}")
                     
                     if screenshots:
                         print(f"    • Found {len(screenshots)} screenshot(s)")
@@ -412,17 +449,30 @@ Examples:
     if args.create_tests and not args.story:
         parser.error("--create-tests requires --story to be specified")
     
+    # Validate Story ID format if provided
+    if args.story:
+        if not re.match(r'^[A-Z][A-Z0-9]+-\d+$', args.story):
+            parser.error(f"Invalid Story ID format: {args.story}. Expected format: ABC-123")
+    
+    # Validate output directory path
+    output_path = Path(args.output)
+    try:
+        # Resolve to absolute path and check it's safe
+        output_path = output_path.resolve()
+    except (OSError, RuntimeError) as e:
+        parser.error(f"Invalid output directory path: {e}")
+    
     print("\n" + "="*80)
     print("XRAY TEST RESULTS UPLOADER")
     print("="*80)
-    print(f"Output Directory: {args.output}")
+    print(f"Output Directory: {output_path}")
     if args.story:
         print(f"Story ID: {args.story}")
     if args.create_tests:
         print(f"Auto-create tests: Enabled")
     
     # Upload results
-    success = upload_results_to_xray(args.output, args.story, args.create_tests)
+    success = upload_results_to_xray(str(output_path), args.story, args.create_tests)
     
     sys.exit(0 if success else 1)
 
