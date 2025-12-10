@@ -151,11 +151,14 @@ def upload_results_to_xray(output_dir: str, story_id: str = None):
         return False
 
 
-def run_tests_and_upload(test_path: str, output_dir: str = "output", 
+def run_tests_and_upload(test_path: str, output_dir: str = "tests/Web/Output", 
                          tags: list = None, browser: str = None):
     """Run Robot Framework tests and upload results to Xray."""
     
     from robot import run as robot_run
+    
+    # Create output directory if it doesn't exist
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     print("="*80)
     print("RUNNING TESTS WITH XRAY INTEGRATION")
@@ -245,8 +248,8 @@ def main():
     parser.add_argument(
         'output_dir',
         nargs='?',
-        default='output',
-        help='Output directory containing test results (default: output)'
+        default='tests/Web/Output',
+        help='Output directory containing test results (default: tests/Web/Output)'
     )
     
     # Common options
@@ -268,8 +271,8 @@ def main():
     
     parser.add_argument(
         '--output', '-o',
-        default='output',
-        help='Output directory for test results (default: output)'
+        default='tests/Web/Output',
+        help='Output directory for test results (default: tests/Web/Output)'
     )
     
     args = parser.parse_args()
