@@ -173,9 +173,11 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                         else:
                             print(f"⚠ Warning: Invalid test key format in tag: {tag_text} (extracted: {potential_key})")
                 
+                # If no xray tag found, we'll create a placeholder that will be auto-created later
                 if not test_key:
-                    print(f"⚠ Warning: Test '{test_name}' has no valid xray:PROJECT-### tag - skipping")
-                    continue
+                    # Use test name as placeholder - will be created if --create-tests is enabled
+                    test_key = f"AUTO_CREATE_{test_name.replace(' ', '_')}"
+                    print(f"ℹ Info: Test '{test_name}' has no xray tag - will auto-create if enabled")
                 
                 print(f"✓ Found test: {test_key} - {test_name} ({xray_status})")
                 
@@ -298,10 +300,11 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
     test_results, extracted_story_id = parse_test_results_from_xml(str(output_xml))
     
     if not test_results:
-        print("\n⚠ No tests with xray:TP-XXXX tags found - nothing to upload")
+        print("\n⚠ No tests found in output.xml")
+        print("   Make sure your Robot Framework tests ran and generated output.xml")
         return False
     
-    print(f"\n✓ Found {len(test_results)} test(s) with Xray tags")
+    print(f"\n✓ Found {len(test_results)} test(s)")
     
     # Use extracted story ID if not provided
     if not story_id and extracted_story_id:
@@ -324,6 +327,31 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
     for test_result in test_results:
         test_key = test_result.get('test_key')
         scenario_name = test_result.get('scenario_name')
+        
+        # Check if this is an auto-create placeholder
+        if test_key.startswith('AUTO_CREATE_'):
+            # This test has no xray tag - must create it
+            if create_tests and story_id:
+                print(f"   → Test '{scenario_name}' has no xray tag - creating new test...")
+                try:
+                    # Create new test linked to Story
+                    new_test_key = test_manager.create_or_get_test(scenario_name, story_id)
+                    print(f"      ✓ Created: {new_test_key}")
+                    
+                    # Update test_result with new test key
+                    test_result['test_key'] = new_test_key
+                    validated_results.append(test_result)
+                    
+                except Exception as e:
+                    print(f"      ✗ Failed to create test: {e}")
+                    print(f"      → Skipping '{scenario_name}'")
+            elif not story_id:
+                print(f"   ⚠ Test '{scenario_name}' has no xray tag and no Story ID provided")
+                print(f"      → Cannot create test (use --story to specify Story ID)")
+            else:
+                print(f"   ⚠ Test '{scenario_name}' has no xray tag")
+                print(f"      → Skipping (use --create-tests --story to auto-create)")
+            continue
         
         # Check if test exists
         issue_id = test_manager._get_jira_issue_id(test_key)
