@@ -14,6 +14,12 @@ from robot import run as robot_run
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# Import browser options fixer to prevent 'add_argument' errors
+try:
+    from libraries import BrowserOptionsFixer
+except ImportError:
+    print("Note: BrowserOptionsFixer not available")
+
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
