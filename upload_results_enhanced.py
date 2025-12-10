@@ -199,25 +199,98 @@ def upload_results_to_xray(output_dir: str, story_id: str = None):
     # Upload to Xray
     try:
         from integrations.xray import execution_manager
+        from integrations.xray import test_manager
         
         output_xml = str(Path(output_dir) / "output.xml")
         
-        print(f"\n📤 Uploading {output_xml} to Xray...")
+        print(f"\n📤 Uploading to Xray...")
         print(f"   Test IDs: {', '.join(test_data['test_ids']) if test_data['test_ids'] else 'None'}")
         print(f"   Story ID: {story_id or 'None'}")
         
-        # Call Xray upload logic
-        # This should handle BDD format with Given/When/Then keywords
-        # result = execution_manager.upload_execution_results(
-        #     output_xml, 
-        #     story_id=story_id,
-        #     test_ids=test_data['test_ids']
-        # )
+        if not test_data['test_ids']:
+            print("\n⚠ No test IDs found - cannot create Test Execution")
+            return False
         
-        print("\n✓ Results uploaded successfully to Xray Cloud")
-        print(f"  • {test_data['test_count']} test(s) uploaded")
+        # Step 1: Get Jira internal IDs for the tests
+        print("\n1️⃣ Getting Jira internal IDs for tests...")
+        test_jira_ids = []
+        for test_key in test_data['test_ids']:
+            jira_id = test_manager._get_jira_issue_id(test_key)
+            if jira_id:
+                test_jira_ids.append(jira_id)
+                print(f"   ✓ {test_key} → {jira_id}")
+            else:
+                print(f"   ✗ Could not find Jira ID for {test_key}")
+        
+        if not test_jira_ids:
+            print("\n✗ No valid Jira IDs found for tests")
+            return False
+        
+        # Step 2: Create Test Execution
+        print(f"\n2️⃣ Creating Test Execution...")
+        summary = f"Test Execution - {test_data['test_count']} test(s)"
         if story_id:
-            print(f"  • Linked to Story: {story_id}")
+            summary += f" for {story_id}"
+        
+        description = f"Automated test execution\\n"
+        description += f"Tests: {', '.join(test_data['test_ids'])}\\n"
+        if story_id:
+            description += f"Story: {story_id}"
+        
+        execution_result = execution_manager.create_test_execution_graphql(
+            test_issue_ids=test_jira_ids,
+            summary=summary,
+            description=description
+        )
+        
+        if not execution_result:
+            print("\n✗ Failed to create Test Execution")
+            return False
+        
+        execution_key = execution_result.get('issueKey', 'Unknown')
+        print(f"   ✓ Created Test Execution: {execution_key}")
+        
+        # Step 3: Parse output.xml and update test results
+        print(f"\n3️⃣ Updating test results from output.xml...")
+        from robot.api import ExecutionResult
+        
+        results = ExecutionResult(output_xml)
+        
+        for suite in results.suite.suites:
+            for test in suite.tests:
+                # Find matching test ID from tags
+                test_key = None
+                for tag in test.tags:
+                    if '-' in tag and any(c.isdigit() for c in tag):
+                        test_key = tag
+                        break
+                
+                if test_key and test_key in test_data['test_ids']:
+                    status = "PASS" if test.passed else "FAIL"
+                    comment = f"{test.name}\\n\\nStatus: {status}"
+                    if test.message:
+                        comment += f"\\nMessage: {test.message}"
+                    
+                    # Update test run result
+                    success = execution_manager.update_test_run_graphql(
+                        execution_key=execution_key,
+                        test_key=test_key,
+                        status=status,
+                        comment=comment
+                    )
+                    
+                    if success:
+                        print(f"   ✓ {test_key}: {status}")
+                    else:
+                        print(f"   ✗ Failed to update {test_key}")
+        
+        print("\n" + "="*80)
+        print("✓ UPLOAD COMPLETE")
+        print(f"  • Test Execution: {execution_key}")
+        print(f"  • Tests Updated: {test_data['test_count']}")
+        if story_id:
+            print(f"  • Story: {story_id}")
+        print("="*80)
         
         return True
         
