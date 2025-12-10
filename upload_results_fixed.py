@@ -323,16 +323,19 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
     # Create or validate test IDs before upload
     print("\n🔍 Validating/Creating Test IDs in Xray...")
     validated_results = []
+    skipped_count = 0
     
     for test_result in test_results:
         test_key = test_result.get('test_key')
         scenario_name = test_result.get('scenario_name')
         
+        print(f"\n   Processing: {test_key} - {scenario_name}")
+        
         # Check if this is an auto-create placeholder
         if test_key.startswith('AUTO_CREATE_'):
             # This test has no xray tag - must create it
             if create_tests and story_id:
-                print(f"   → Test '{scenario_name}' has no xray tag - creating new test...")
+                print(f"      → No xray tag - creating new test...")
                 try:
                     # Create new test linked to Story
                     new_test_key = test_manager.create_or_get_test(scenario_name, story_id)
@@ -344,28 +347,34 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
                     
                 except Exception as e:
                     print(f"      ✗ Failed to create test: {e}")
-                    print(f"      → Skipping '{scenario_name}'")
+                    skipped_count += 1
             elif not story_id:
-                print(f"   ⚠ Test '{scenario_name}' has no xray tag and no Story ID provided")
-                print(f"      → Cannot create test (use --story to specify Story ID)")
+                print(f"      ⚠ No xray tag and no Story ID provided")
+                print(f"      → Add --story TP-XXXX to create test")
+                skipped_count += 1
             else:
-                print(f"   ⚠ Test '{scenario_name}' has no xray tag")
-                print(f"      → Skipping (use --create-tests --story to auto-create)")
+                print(f"      ⚠ No xray tag - use --create-tests to auto-create")
+                skipped_count += 1
             continue
         
-        # Check if test exists
-        issue_id = test_manager._get_jira_issue_id(test_key)
+        # Check if test exists in Xray
+        print(f"      → Checking if {test_key} exists in Xray...")
+        try:
+            issue_id = test_manager._get_jira_issue_id(test_key)
+        except Exception as e:
+            print(f"      ✗ Error checking test: {e}")
+            issue_id = None
         
         if issue_id:
-            print(f"   ✓ {test_key} exists")
+            print(f"      ✓ {test_key} exists (ID: {issue_id})")
             validated_results.append(test_result)
         else:
             # Test doesn't exist
-            print(f"   ⚠ {test_key} not found in Xray")
+            print(f"      ⚠ {test_key} not found in Xray")
             
             if create_tests and story_id:
                 # Auto-create the test
-                print(f"      → Creating new test: {scenario_name}")
+                print(f"      → Creating test: {scenario_name}")
                 try:
                     # Create new test linked to Story
                     new_test_key = test_manager.create_or_get_test(scenario_name, story_id)
@@ -377,18 +386,31 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
                     
                 except Exception as e:
                     print(f"      ✗ Failed to create test: {e}")
-                    print(f"      → Skipping {test_key}")
+                    skipped_count += 1
             elif create_tests and not story_id:
-                print(f"      → Cannot create test: Story ID required")
-                print(f"      → Skipping {test_key}")
+                print(f"      → Cannot create: Story ID required (use --story TP-XXXX)")
+                skipped_count += 1
             else:
                 print(f"      → Skipping (use --create-tests --story to auto-create)")
+                skipped_count += 1
     
     if not validated_results:
-        print("\n✗ No valid tests to upload after validation")
+        print(f"\n✗ No valid tests to upload after validation")
+        print(f"   Processed: {len(test_results)} test(s)")
+        print(f"   Validated: {len(validated_results)} test(s)")
+        print(f"   Skipped: {skipped_count} test(s)")
+        print("\nPossible reasons:")
+        if not create_tests:
+            print("  • Missing --create-tests flag to auto-create tests")
+        if not story_id:
+            print("  • Missing --story flag (required for creating tests)")
+        print("\nTo upload all tests, use:")
+        print(f"  python upload_results_fixed.py --output {output_dir} --story TP-XXXX --create-tests")
         return False
     
     print(f"\n✓ Validated {len(validated_results)} test(s) for upload")
+    if skipped_count > 0:
+        print(f"⚠ Skipped {skipped_count} test(s)")
     
     # Collect attachments (log.html, report.html)
     attachments = []
