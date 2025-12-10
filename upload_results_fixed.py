@@ -160,16 +160,13 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 tags = test.findall('tag')
                 test_key = None
                 
-                # Debug: show all tags for this test
-                all_tags = [tag.text for tag in tags if tag.text]
-                
                 for tag in tags:
                     tag_text = tag.text
                     if tag_text and tag_text.startswith('xray:'):
                         # Strip "xray:" prefix
                         potential_key = tag_text[5:]
                         # Validate test key format (prevent injection)
-                        # Allows formats like: TP-123, ABC-456, XYZ999-789
+                        # Allows formats like: TP-9876, XSP-168, ABC-456
                         if re.match(r'^[A-Z][A-Z0-9]*-\d+$', potential_key):
                             test_key = potential_key
                             break
