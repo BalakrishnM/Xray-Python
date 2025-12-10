@@ -127,9 +127,19 @@ def run_tests_with_xray(test_path="tests", output_dir="output", tags=None, skip_
         # Add as library to Robot Framework
         robot_kwargs['pythonpath'] = str(library_dir)
     
+    # Build listener list
+    listeners = []
+    
+    # Add BrowserOptionsFixer listener to fix string options issues
+    listeners.append('libraries.BrowserOptionsFixer.BrowserOptionsFixer')
+    
     # Add Xray listener unless skip_xray is True
     if not skip_xray:
-        robot_kwargs['listener'] = 'integrations.xray.XrayListener'
+        listeners.append('integrations.xray.XrayListener')
+    
+    # Set listeners
+    if listeners:
+        robot_kwargs['listener'] = listeners
     
     # Add tag filtering if specified
     if tags:
