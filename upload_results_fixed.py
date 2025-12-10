@@ -24,6 +24,26 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
+# Add project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    env_file = project_root / '.env'
+    if env_file.exists():
+        load_dotenv(env_file)
+        print(f"✓ Loaded environment variables from {env_file}")
+    else:
+        load_dotenv()  # Try to load from current directory
+        print("✓ Loaded environment variables from .env file")
+except ImportError:
+    print("⚠ python-dotenv not installed - install with: pip install python-dotenv")
+    print("   Using system environment variables only")
+except Exception as e:
+    print(f"⚠ Could not load .env file: {e}")
+
 
 def setup_environment() -> bool:
     """Check Xray environment variables."""
@@ -194,7 +214,7 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
         return [], None
 
 
-def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None) -> bool:
+def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, create_tests: bool = False) -> bool:
     """
     Upload test results to Xray using execution_manager.update_execution_results().
     
@@ -203,6 +223,7 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None) -> b
     Args:
         output_dir: Directory containing output.xml
         story_id: Optional Story ID to link to Test Execution
+        create_tests: If True, automatically create tests that don't exist (requires story_id)
         
     Returns:
         True if upload successful, False otherwise
@@ -246,12 +267,57 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None) -> b
     elif story_id:
         print(f"✓ Using provided Story ID: {story_id}")
     
-    # Import execution manager
+    # Import execution manager and test manager
     try:
-        from integrations.xray import execution_manager
+        from integrations.xray import execution_manager, test_manager
     except ImportError as e:
-        print(f"✗ ERROR: Could not import execution_manager: {e}")
+        print(f"✗ ERROR: Could not import Xray modules: {e}")
         return False
+    
+    # Create or validate test IDs before upload
+    print("\n🔍 Validating/Creating Test IDs in Xray...")
+    validated_results = []
+    
+    for test_result in test_results:
+        test_key = test_result.get('test_key')
+        scenario_name = test_result.get('scenario_name')
+        
+        # Check if test exists
+        issue_id = test_manager._get_jira_issue_id(test_key)
+        
+        if issue_id:
+            print(f"   ✓ {test_key} exists")
+            validated_results.append(test_result)
+        else:
+            # Test doesn't exist
+            print(f"   ⚠ {test_key} not found in Xray")
+            
+            if create_tests and story_id:
+                # Auto-create the test
+                print(f"      → Creating new test: {scenario_name}")
+                try:
+                    # Create new test linked to Story
+                    new_test_key = test_manager.create_or_get_test(scenario_name, story_id)
+                    print(f"      ✓ Created: {new_test_key}")
+                    
+                    # Update test_result with new test key
+                    test_result['test_key'] = new_test_key
+                    validated_results.append(test_result)
+                    
+                except Exception as e:
+                    print(f"      ✗ Failed to create test: {e}")
+                    print(f"      → Skipping {test_key}")
+            elif create_tests and not story_id:
+                print(f"      → Cannot create test: Story ID required")
+                print(f"      → Skipping {test_key}")
+            else:
+                print(f"      → Skipping (use --create-tests --story to auto-create)")
+    
+    if not validated_results:
+        print("\n✗ No valid tests to upload after validation")
+        return False
+    
+    print(f"\n✓ Validated {len(validated_results)} test(s) for upload")
     
     # Collect attachments (log.html, report.html)
     attachments = []
@@ -264,14 +330,14 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None) -> b
     # Upload using execution_manager.update_execution_results()
     # This is the SAME function that XrayListener.end_suite() uses
     print("\n📤 Uploading to Xray Cloud...")
-    print(f"   Tests: {len(test_results)}")
-    print(f"   Total Steps: {sum(len(tr['step_results']) for tr in test_results)}")
-    print(f"   Screenshots: {sum(len(tr['screenshots']) for tr in test_results)}")
+    print(f"   Tests: {len(validated_results)}")
+    print(f"   Total Steps: {sum(len(tr['step_results']) for tr in validated_results)}")
+    print(f"   Screenshots: {sum(len(tr['screenshots']) for tr in validated_results)}")
     print(f"   Attachments: {len(attachments)}")
     
     try:
         test_exec_key = execution_manager.update_execution_results(
-            test_results=test_results,
+            test_results=validated_results,
             attachments=attachments if attachments else None
         )
         
@@ -315,8 +381,11 @@ Examples:
     # Upload with custom output directory
     python upload_results_fixed.py --output tests/Web/Output
     
-    # Upload and link to Story
+    # Upload and link to Story (required for auto-creating tests)
     python upload_results_fixed.py --output tests/Web/Output --story TP-8071
+    
+    # Auto-create tests that don't exist (requires --story)
+    python upload_results_fixed.py --output tests/Web/Output --story TP-8071 --create-tests
         """
     )
     
@@ -328,10 +397,20 @@ Examples:
     
     parser.add_argument(
         '--story',
-        help='Story ID to link Test Execution to (e.g., TP-8071)'
+        help='Story ID to link Test Execution to (e.g., TP-8071). Required for --create-tests.'
+    )
+    
+    parser.add_argument(
+        '--create-tests',
+        action='store_true',
+        help='Automatically create tests in Xray if they don\'t exist (requires --story)'
     )
     
     args = parser.parse_args()
+    
+    # Validate arguments
+    if args.create_tests and not args.story:
+        parser.error("--create-tests requires --story to be specified")
     
     print("\n" + "="*80)
     print("XRAY TEST RESULTS UPLOADER")
@@ -339,9 +418,11 @@ Examples:
     print(f"Output Directory: {args.output}")
     if args.story:
         print(f"Story ID: {args.story}")
+    if args.create_tests:
+        print(f"Auto-create tests: Enabled")
     
     # Upload results
-    success = upload_results_to_xray(args.output, args.story)
+    success = upload_results_to_xray(args.output, args.story, args.create_tests)
     
     sys.exit(0 if success else 1)
 
