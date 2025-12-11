@@ -349,38 +349,43 @@ def add_evidence_to_test_run_step_batch(test_run_id: str, step_id: str, file_pat
                 file_data = base64.b64encode(f.read()).decode()
             
             filename = os.path.basename(file_path)
-            filename_escaped = filename.replace('"', '\\\\"').replace('\\n', ' ')
             
             # Determine MIME type
             mime_type, _ = mimetypes.guess_type(file_path)
             if not mime_type:
                 mime_type = "application/octet-stream"
             
-            evidence_obj = '''{{
-                filename: "{}"
-                mimeType: "{}"
-                data: "{}"
-            }}'''.format(filename_escaped, mime_type, file_data)
-            evidence_items.append(evidence_obj)
+            evidence_items.append({
+                "filename": filename,
+                "mimeType": mime_type,
+                "data": file_data
+            })
         
-        evidence_array = ',\\n'.join(evidence_items)
-        
+        # Use proper GraphQL variables instead of string interpolation
         mutation = """
-        mutation {{
+        mutation($testRunId: String!, $stepId: String!, $evidence: [AddEvidenceInput!]!) {
             addEvidenceToTestRunStep(
-                testRunId: "{}"
-                stepId: "{}"
-                evidence: [
-                    {}
-                ]
-            ) {{
+                testRunId: $testRunId
+                stepId: $stepId
+                evidence: $evidence
+            ) {
                 addedEvidence
                 warnings
-            }}
-        }}
-        """.format(test_run_id, step_id, evidence_array)
+            }
+        }
+        """
         
-        payload = {"query": mutation}
+        variables = {
+            "testRunId": test_run_id,
+            "stepId": step_id,
+            "evidence": evidence_items
+        }
+        
+        payload = {
+            "query": mutation,
+            "variables": variables
+        }
+        
         response = requests.post(graphql_url, headers=headers, data=json.dumps(payload), timeout=120)
         response.raise_for_status()
         
