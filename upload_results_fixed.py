@@ -217,6 +217,23 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 
                 # Find screenshots for this test
                 screenshots = []
+                
+                # Method 1: Parse from <msg> tags with screenshot references
+                msg_elements = test.findall('.//msg')
+                for msg in msg_elements:
+                    msg_text = msg.text if msg.text else ''
+                    # Look for image references in messages (e.g., src="screenshot.png" or href="screenshot.png")
+                    img_matches = re.findall(r'(?:src=|href=)["\']([^"\']+\.(?:png|jpg|jpeg|gif))["\']', msg_text, re.IGNORECASE)
+                    for img_path in img_matches:
+                        # Resolve relative path from output directory
+                        screenshot_path = output_dir / img_path
+                        if screenshot_path.exists() and screenshot_path.is_file():
+                            screenshots.append({
+                                'path': str(screenshot_path),
+                                'step_index': None
+                            })
+                
+                # Method 2: Look in screenshots/ subdirectory
                 screenshot_dir = Path(output_dir) / 'screenshots'
                 
                 if screenshot_dir.exists() and screenshot_dir.is_dir():
@@ -233,6 +250,10 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                             if filepath.resolve().parent != screenshot_dir.resolve():
                                 continue
                             
+                            # Avoid duplicates from Method 1
+                            if any(s['path'] == str(filepath) for s in screenshots):
+                                continue
+                            
                             if test_name_normalized in filename or test_key in filename:
                                 screenshots.append({
                                     'path': str(filepath),
@@ -240,9 +261,9 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                                 })
                     except (PermissionError, OSError) as e:
                         print(f"    ⚠ Could not read screenshot directory: {e}")
-                    
-                    if screenshots:
-                        print(f"    • Found {len(screenshots)} screenshot(s)")
+                
+                if screenshots:
+                    print(f"    • Found {len(screenshots)} screenshot(s)")
                 
                 # Build test result in XrayListener format
                 test_result = {
