@@ -414,12 +414,28 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
         print(f"  python upload_results_fixed.py --output {output_dir} --story TP-XXXX --create-tests")
         return False
     
-    print(f"\n✓ Validated {len(validated_results)} test(s) for upload")
+    # Deduplicate test results by test_key (keep last occurrence)
+    # Xray doesn't allow duplicate test IDs in a single Test Execution
+    seen_test_keys = {}
+    deduplicated_results = []
+    
+    for test_result in validated_results:
+        test_key = test_result['test_key']
+        if test_key in seen_test_keys:
+            print(f"⚠ Warning: Duplicate test ID '{test_key}' found - keeping last occurrence only")
+        seen_test_keys[test_key] = test_result
+    
+    deduplicated_results = list(seen_test_keys.values())
+    
+    if len(deduplicated_results) < len(validated_results):
+        print(f"\n✓ Deduplicated: {len(validated_results)} tests → {len(deduplicated_results)} unique tests")
+    
+    print(f"\n✓ Validated {len(deduplicated_results)} test(s) for upload")
     if skipped_count > 0:
         print(f"⚠ Skipped {skipped_count} test(s)")
     
     # Important note about test existence
-    tests_not_in_xray = [tr for tr in validated_results if not test_manager._get_jira_issue_id(tr['test_key'])]
+    tests_not_in_xray = [tr for tr in deduplicated_results if not test_manager._get_jira_issue_id(tr['test_key'])]
     if tests_not_in_xray:
         print(f"\n⚠ WARNING: {len(tests_not_in_xray)} test(s) with xray tags don't exist in Xray:")
         for tr in tests_not_in_xray:
@@ -439,14 +455,14 @@ def upload_results_to_xray(output_dir: str, story_id: Optional[str] = None, crea
     # Upload using execution_manager.update_execution_results()
     # This is the SAME function that XrayListener.end_suite() uses
     print("\n📤 Uploading to Xray Cloud...")
-    print(f"   Tests: {len(validated_results)}")
-    print(f"   Total Steps: {sum(len(tr['step_results']) for tr in validated_results)}")
-    print(f"   Screenshots: {sum(len(tr['screenshots']) for tr in validated_results)}")
+    print(f"   Tests: {len(deduplicated_results)}")
+    print(f"   Total Steps: {sum(len(tr['step_results']) for tr in deduplicated_results)}")
+    print(f"   Screenshots: {sum(len(tr['screenshots']) for tr in deduplicated_results)}")
     print(f"   Attachments: {len(attachments)}")
     
     try:
         test_exec_key = execution_manager.update_execution_results(
-            test_results=validated_results,
+            test_results=deduplicated_results,
             attachments=attachments if attachments else None
         )
         
