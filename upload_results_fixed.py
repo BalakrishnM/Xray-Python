@@ -188,10 +188,12 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 print(f"✓ Found test: {test_key} - {test_name} ({xray_status})")
                 
                 # Parse step-level results from keywords (BDD-style: Given/When/Then/And)
+                # Also track screenshots for each step
                 step_results = []
+                step_screenshots = {}  # Map step_index -> list of screenshot paths
                 keywords = test.findall('.//kw')
                 
-                for kw in keywords:
+                for step_idx, kw in enumerate(keywords):
                     kw_name = kw.get('name', '')
                     kw_status_elem = kw.find('status')
                     
@@ -205,7 +207,21 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                             'actual_result': f"{kw_name} - {kw_status}"
                         }
                         step_results.append(step_result)
-                        print(f"    • Step: {kw_name[:50]}... ({kw_xray_status})")
+                        print(f"    • Step {len(step_results)}: {kw_name[:50]}... ({kw_xray_status})")
+                        
+                        # Check for screenshots in this keyword's messages
+                        kw_msgs = kw.findall('.//msg')
+                        for msg in kw_msgs:
+                            msg_text = msg.text if msg.text else ''
+                            # Look for image references
+                            img_matches = re.findall(r'(?:src=|href=)["\']([^"\']+\.(?:png|jpg|jpeg|gif))["\']', msg_text, re.IGNORECASE)
+                            for img_path in img_matches:
+                                screenshot_path = output_dir / img_path
+                                if screenshot_path.exists() and screenshot_path.is_file():
+                                    if len(step_results) - 1 not in step_screenshots:
+                                        step_screenshots[len(step_results) - 1] = []
+                                    step_screenshots[len(step_results) - 1].append(str(screenshot_path))
+                                    print(f"      📸 Screenshot for step {len(step_results)}: {img_path}")
                 
                 # If no BDD steps found, create a single step from test result
                 if not step_results:
@@ -214,26 +230,30 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                         'actual_result': message
                     })
                     print(f"    • No BDD steps found - using test result as single step")
+                    
+                    # Check for screenshots in test-level messages (not in keywords)
+                    test_msgs = test.findall('./msg')  # Direct children only
+                    for msg in test_msgs:
+                        msg_text = msg.text if msg.text else ''
+                        img_matches = re.findall(r'(?:src=|href=)["\']([^"\']+\.(?:png|jpg|jpeg|gif))["\']', msg_text, re.IGNORECASE)
+                        for img_path in img_matches:
+                            screenshot_path = output_dir / img_path
+                            if screenshot_path.exists() and screenshot_path.is_file():
+                                if 0 not in step_screenshots:
+                                    step_screenshots[0] = []
+                                step_screenshots[0].append(str(screenshot_path))
+                                print(f"      📸 Screenshot: {img_path}")
                 
-                # Find screenshots for this test
+                # Build screenshots list with step indices
                 screenshots = []
+                for step_idx, paths in step_screenshots.items():
+                    for path in paths:
+                        screenshots.append({
+                            'path': path,
+                            'step_index': step_idx
+                        })
                 
-                # Method 1: Parse from <msg> tags with screenshot references
-                msg_elements = test.findall('.//msg')
-                for msg in msg_elements:
-                    msg_text = msg.text if msg.text else ''
-                    # Look for image references in messages (e.g., src="screenshot.png" or href="screenshot.png")
-                    img_matches = re.findall(r'(?:src=|href=)["\']([^"\']+\.(?:png|jpg|jpeg|gif))["\']', msg_text, re.IGNORECASE)
-                    for img_path in img_matches:
-                        # Resolve relative path from output directory
-                        screenshot_path = output_dir / img_path
-                        if screenshot_path.exists() and screenshot_path.is_file():
-                            screenshots.append({
-                                'path': str(screenshot_path),
-                                'step_index': None
-                            })
-                
-                # Method 2: Look in screenshots/ subdirectory
+                # Also check screenshots/ directory (fallback - distribute across steps)
                 screenshot_dir = Path(output_dir) / 'screenshots'
                 
                 if screenshot_dir.exists() and screenshot_dir.is_dir():
@@ -250,14 +270,15 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                             if filepath.resolve().parent != screenshot_dir.resolve():
                                 continue
                             
-                            # Avoid duplicates from Method 1
+                            # Avoid duplicates
                             if any(s['path'] == str(filepath) for s in screenshots):
                                 continue
                             
                             if test_name_normalized in filename or test_key in filename:
+                                # Distribute screenshots from directory to first step (or evenly across steps)
                                 screenshots.append({
                                     'path': str(filepath),
-                                    'step_index': None  # Will be distributed by execution_manager
+                                    'step_index': 0 if step_results else None
                                 })
                     except (PermissionError, OSError) as e:
                         print(f"    ⚠ Could not read screenshot directory: {e}")
