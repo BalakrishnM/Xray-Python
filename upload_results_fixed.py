@@ -163,11 +163,14 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 for tag in tags:
                     tag_text = tag.text
                     if tag_text:
+                        # Strip whitespace (some XML parsers preserve leading/trailing spaces)
+                        tag_text = tag_text.strip()
+                        
                         # Check for xray tag (case-insensitive: xray:, Xray:, XRAY:)
                         if tag_text.lower().startswith('xray:'):
                             # Find colon and extract after it (handles any case)
                             colon_pos = tag_text.find(':')
-                            potential_key = tag_text[colon_pos+1:]
+                            potential_key = tag_text[colon_pos+1:].strip()  # Strip whitespace from test ID too
                             # Validate test key format (prevent injection)
                             # Allows formats like: TP-9876, XSP-168, ABC-456
                             if re.match(r'^[A-Z][A-Z0-9]*-\d+$', potential_key):

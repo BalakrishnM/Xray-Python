@@ -36,14 +36,26 @@ for idx, test in enumerate(all_tests, 1):
     if tags:
         for tag in tags:
             tag_text = tag.text if tag.text else '(empty)'
-            is_xray = tag_text.lower().startswith('xray:') if tag.text else False
             
-            if is_xray:
-                colon_pos = tag_text.find(':')
-                extracted = tag_text[colon_pos+1:]
-                print(f"   ✓ '{tag_text}' -> Will extract: {extracted}")
+            # Debug: Show raw representation
+            if tag.text:
+                print(f"   RAW: {repr(tag_text)} (length: {len(tag_text)})")
+                tag_stripped = tag_text.strip()
+                tag_lower = tag_stripped.lower()
+                is_xray = tag_lower.startswith('xray:')
+                
+                print(f"   After strip: '{tag_stripped}'")
+                print(f"   Lowercase: '{tag_lower}'")
+                print(f"   Starts with 'xray:': {is_xray}")
+                
+                if is_xray:
+                    colon_pos = tag_stripped.find(':')
+                    extracted = tag_stripped[colon_pos+1:]
+                    print(f"   ✓ XRAY TAG FOUND! Will extract: {extracted}")
+                else:
+                    print(f"   • Regular tag")
             else:
-                print(f"   • '{tag_text}'")
+                print(f"   • (empty tag)")
     else:
         print(f"   ⚠ NO TAGS FOUND - This will become AUTO_CREATE_{test_name.replace(' ', '_')}")
     
