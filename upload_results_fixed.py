@@ -160,21 +160,34 @@ def parse_test_results_from_xml(output_xml_path: str) -> Tuple[List[Dict[str, An
                 tags = test.findall('tag')
                 test_key = None
                 
+                # Debug: Print all tags found
+                all_tag_texts = [tag.text for tag in tags if tag.text]
+                if all_tag_texts:
+                    print(f"  DEBUG: All tags for test '{test_name}': {all_tag_texts}")
+                
                 for tag in tags:
                     tag_text = tag.text
-                    if tag_text and tag_text.startswith('xray:'):
-                        # Strip "xray:" prefix
-                        potential_key = tag_text[5:]
-                        # Validate test key format (prevent injection)
-                        # Allows formats like: TP-9876, XSP-168, ABC-456
-                        if re.match(r'^[A-Z][A-Z0-9]*-\d+$', potential_key):
-                            test_key = potential_key
-                            break
-                        else:
-                            print(f"⚠ Warning: Invalid test key format in tag: {tag_text} (extracted: {potential_key})")
+                    if tag_text:
+                        print(f"  DEBUG: Checking tag: '{tag_text}'")
+                        # Check for xray tag (case-insensitive: xray:, Xray:, XRAY:)
+                        if tag_text.lower().startswith('xray:'):
+                            # Find colon and extract after it (handles any case)
+                            colon_pos = tag_text.find(':')
+                            potential_key = tag_text[colon_pos+1:]
+                            print(f"  DEBUG: Found xray tag! Extracted: '{potential_key}'")
+                            # Validate test key format (prevent injection)
+                            # Allows formats like: TP-9876, XSP-168, ABC-456
+                            if re.match(r'^[A-Z][A-Z0-9]*-\d+$', potential_key):
+                                test_key = potential_key
+                                print(f"  DEBUG: ✓ Regex matched! Using test_key: '{test_key}'")
+                                break
+                            else:
+                                print(f"  DEBUG: ✗ Regex failed for '{potential_key}'")
+                                print(f"⚠ Warning: Invalid test key format in tag: {tag_text} (extracted: {potential_key})")
                 
                 # If no xray tag found, we'll create a placeholder that will be auto-created later
                 if not test_key:
+                    print(f"  DEBUG: No valid xray tag found for '{test_name}'")
                     # Use test name as placeholder - will be created if --create-tests is enabled
                     test_key = f"AUTO_CREATE_{test_name.replace(' ', '_')}"
                     print(f"ℹ Info: Test '{test_name}' has no xray tag - will auto-create if enabled")

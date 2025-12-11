@@ -23,6 +23,21 @@ def diagnose_xml(xml_path: str):
     print(f"Root element: <{root.tag}>")
     print(f"Root attributes: {root.attrib}\n")
     
+    # Check for tags at root level
+    print("🔍 Checking for tags at ROOT level...")
+    root_tags = root.findall('tag')
+    if root_tags:
+        print(f"  ✓ Found {len(root_tags)} tag(s) at ROOT level:")
+        for tag in root_tags:
+            tag_text = tag.text if tag.text else '(empty)'
+            if tag.text and 'xray:' in tag.text.lower():
+                print(f"    • {tag_text} ⭐ XRAY TAG AT ROOT LEVEL")
+            else:
+                print(f"    • {tag_text}")
+    else:
+        print(f"  ✗ No tags at ROOT level")
+    print()
+    
     # Find all suites
     all_suites = [root] if root.tag == 'suite' else []
     all_suites.extend(root.findall('.//suite'))
@@ -36,89 +51,145 @@ def diagnose_xml(xml_path: str):
         print(f"{'─'*80}")
         
         # Check for suite-level tags
+        print(f"\n🔍 Checking for tags at SUITE level...")
         suite_tags = suite.findall('tag')
         if suite_tags:
-            print(f"\n  Suite-level tags:")
+            print(f"  ✓ Found {len(suite_tags)} tag(s) at SUITE level:")
             for tag in suite_tags:
-                print(f"    • {tag.text}")
+                tag_text = tag.text if tag.text else '(empty)'
+                if tag.text and 'xray:' in tag.text.lower():
+                    print(f"    • {tag_text} ⭐ XRAY TAG AT SUITE LEVEL")
+                else:
+                    print(f"    • {tag_text}")
+        else:
+            print(f"  ✗ No tags at SUITE level")
         
-        # Find all tests in this suite
-        tests = suite.findall('.//test')
-        print(f"\n  Found {len(tests)} test(s) in this suite:\n")
+        # Find direct test children (not nested)
+        direct_tests = suite.findall('test')
+        # Find all nested tests
+        all_tests = suite.findall('.//test')
         
-        for test_idx, test in enumerate(tests, 1):
+        print(f"\n  Tests: {len(direct_tests)} direct, {len(all_tests)} total (including nested)")
+        
+        for test_idx, test in enumerate(all_tests, 1):
             test_name = test.get('name', 'Unknown')
             test_id = test.get('id', 'Unknown')
             
-            print(f"  TEST {test_idx}: {test_name}")
-            print(f"    ID: {test_id}")
+            print(f"\n  ┌─ TEST {test_idx}: {test_name}")
+            print(f"  │   ID: {test_id}")
             
             # Get test status
             status_elem = test.find('status')
             if status_elem is not None:
                 status = status_elem.get('status', 'UNKNOWN')
-                print(f"    Status: {status}")
+                print(f"  │   Status: {status}")
             
             # Get all tags
+            print(f"  │")
+            print(f"  │   🔍 Checking for tags at TEST level...")
             tags = test.findall('tag')
-            print(f"    Tags ({len(tags)}):")
+            print(f"  │   Tags ({len(tags)}):")
             if tags:
                 for tag in tags:
                     tag_text = tag.text if tag.text else '(empty)'
-                    is_xray = tag_text.startswith('xray:') if tag.text else False
-                    marker = "✓ XRAY TAG" if is_xray else ""
-                    print(f"      • '{tag_text}' {marker}")
                     
-                    if is_xray:
-                        extracted = tag_text[5:]
-                        print(f"        → Would extract: '{extracted}'")
+                    # Debug: Show exact characters
+                    if tag.text:
+                        tag_repr = repr(tag_text)
+                        tag_lower = tag_text.lower()
+                        has_xray = 'xray:' in tag_lower
+                        starts_xray = tag_lower.startswith('xray:')
+                        
+                        if starts_xray:
+                            print(f"  │     ⭐ XRAY TAG FOUND AT TEST LEVEL!")
+                        
+                        print(f"  │     • Repr: {tag_repr}")
+                        print(f"  │       Text: '{tag_text}'")
+                        print(f"  │       Lower: '{tag_lower}'")
+                        print(f"  │       Length: {len(tag_text)} chars")
+                        print(f"  │       Contains 'xray:': {has_xray}")
+                        print(f"  │       Starts with 'xray:': {starts_xray}")
+                        
+                        if starts_xray:
+                            colon_pos = tag_text.find(':')
+                            extracted = tag_text[colon_pos+1:]
+                            print(f"  │       → Would extract: '{extracted}'")
+                        print(f"  │")
             else:
-                print(f"      (no tags found)")
+                print(f"  │     ✗ No tags at TEST level")
+            
+            print(f"  └─")
             
             # Check for metadata/kw elements
             metadata = test.findall('kw')
             if metadata:
-                print(f"    Keywords: {len(metadata)} found")
-            
-            print()
+                print(f"      Keywords: {len(metadata)} found")
     
     # Summary
     print(f"\n{'='*80}")
-    print("SUMMARY")
+    print("SUMMARY - WHERE ARE XRAY TAGS?")
     print(f"{'='*80}")
     
     total_tests = len(root.findall('.//test'))
     total_tags = len(root.findall('.//test/tag'))
-    xray_tags = [tag for tag in root.findall('.//test/tag') if tag.text and tag.text.startswith('xray:')]
+    xray_tags = [tag for tag in root.findall('.//test/tag') if tag.text and tag.text.lower().startswith('xray:')]
     
-    print(f"Total tests: {total_tests}")
-    print(f"Total tags: {total_tags}")
-    print(f"Xray tags: {len(xray_tags)}")
+    # Check different levels
+    root_xray = [tag for tag in root.findall('tag') if tag.text and 'xray:' in tag.text.lower()]
+    suite_xray = [tag for tag in root.findall('.//suite/tag') if tag.text and 'xray:' in tag.text.lower()]
+    test_xray = [tag for tag in root.findall('.//test/tag') if tag.text and 'xray:' in tag.text.lower()]
     
-    if xray_tags:
-        print(f"\nXray test IDs found:")
-        for tag in xray_tags:
-            print(f"  • {tag.text[5:]}")
-    else:
-        print(f"\n⚠ NO XRAY TAGS FOUND!")
+    print(f"\nTotal tests: {total_tests}")
+    print(f"Total test-level tags: {total_tags}")
+    print(f"\n📍 XRAY TAG LOCATIONS:")
+    print(f"   • At ROOT level: {len(root_xray)} xray tag(s)")
+    print(f"   • At SUITE level: {len(suite_xray)} xray tag(s)")
+    print(f"   • At TEST level: {len(test_xray)} xray tag(s)")
+    
+    if test_xray:
+        print(f"\n✓ Xray test IDs found at TEST level:")
+        for tag in test_xray:
+            colon_pos = tag.text.find(':')
+            extracted = tag.text[colon_pos+1:]
+            print(f"  • {extracted}")
+    
+    if suite_xray:
+        print(f"\n⚠ Xray tags found at SUITE level (not currently supported):")
+        for tag in suite_xray:
+            colon_pos = tag.text.find(':')
+            extracted = tag.text[colon_pos+1:]
+            print(f"  • {extracted}")
+        print(f"\n  NOTE: The upload script only reads tags at TEST level.")
+        print(f"        You need to move these tags to individual tests.")
+    
+    if root_xray:
+        print(f"\n⚠ Xray tags found at ROOT level (not currently supported):")
+        for tag in root_xray:
+            colon_pos = tag.text.find(':')
+            extracted = tag.text[colon_pos+1:]
+            print(f"  • {extracted}")
+        print(f"\n  NOTE: The upload script only reads tags at TEST level.")
+    
+    if not test_xray and not suite_xray and not root_xray:
+        print(f"\n❌ NO XRAY TAGS FOUND at any level!")
         print(f"\nPossible reasons:")
-        print(f"  1. Tags might be at suite level instead of test level")
-        print(f"  2. Tags might not have 'xray:' prefix")
-        print(f"  3. Tests might not have tags at all")
+        print(f"  1. Tags don't have 'xray:' prefix (case-insensitive)")
+        print(f"  2. Tests don't have tags at all")
+        print(f"  3. Tags might be in a different format")
         
-        # Check suite-level tags
-        suite_tags_all = root.findall('.//suite/tag')
-        if suite_tags_all:
-            print(f"\n  Found {len(suite_tags_all)} suite-level tags:")
-            for tag in suite_tags_all[:5]:  # Show first 5
-                print(f"    • {tag.text}")
-        
-        # Check all tags regardless of xray prefix
-        all_test_tags = root.findall('.//test/tag')
-        if all_test_tags:
-            print(f"\n  All test tags found (first 10):")
-            for tag in all_test_tags[:10]:
-                print(f"    • {tag.text if tag.text else '(empty)'}")
+        # Show all tags found
+        all_tags_anywhere = root.findall('.//tag')
+        if all_tags_anywhere:
+            print(f"\n  All tags found in XML (first 10):")
+            for tag in all_tags_anywhere[:10]:
+                level = "UNKNOWN"
+                if tag in root.findall('tag'):
+                    level = "ROOT"
+                elif tag in root.findall('.//suite/tag'):
+                    level = "SUITE"
+                elif tag in root.findall('.//test/tag'):
+                    level = "TEST"
+                print(f"    [{level}] • {tag.text if tag.text else '(empty)'}")
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
